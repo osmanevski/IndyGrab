@@ -639,14 +639,18 @@ async function getOrCreateFolder(folderName, parentId = '1') {
 
 // ---- AI tasks (ai-core.js does provider calls, rules, hashing and prompts) ----------------
 async function loadAiContext() {
-    const d = await chrome.storage.local.get(['geminiApiKeys', 'geminiApiKey', 'deepseekApiKeys', 'aiSettings']);
+    const d = await chrome.storage.local.get(['geminiApiKeys', 'geminiApiKey', 'deepseekApiKeys', 'claudeApiKeys', 'aiSettings']);
     let gemini = IndyAI.normalizeKeyList(d.geminiApiKeys || []);
     if (!gemini.length && d.geminiApiKey) {
         gemini = IndyAI.normalizeKeyList([d.geminiApiKey]);
         await chrome.storage.local.set({ geminiApiKeys: gemini });
     }
     return {
-        keys: { gemini, deepseek: IndyAI.normalizeKeyList(d.deepseekApiKeys || []) },
+        keys: {
+            gemini,
+            deepseek: IndyAI.normalizeKeyList(d.deepseekApiKeys || []),
+            claude: IndyAI.normalizeKeyList(d.claudeApiKeys || [])
+        },
         settings: IndyAI.mergeSettings(d.aiSettings)
     };
 }

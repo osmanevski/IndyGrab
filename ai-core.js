@@ -1,4 +1,4 @@
-// Shared AI layer for the service worker: provider key queues (Gemini, DeepSeek),
+// Shared AI layer for the service worker: provider key queues (Gemini, DeepSeek, Claude),
 // deterministic risk rules, perceptual image hash and prompt/response handling.
 // No DOM and no chrome.* access here, so the same file runs under node tests.
 (function (root) {
@@ -7,11 +7,12 @@
     const PROVIDERS = {
         gemini: { label: 'Gemini', model: 'gemini-3.8-flash', note: 'Gemini 3.8 Flash' },
         // DeepSeek keeps one alias for its newest Flash release (DeepSeek-V4.1-Flash as of 2026-09-13).
-        deepseek: { label: 'DeepSeek', model: 'deepseek-flash', note: "DeepSeek'in en yeni Flash modeline yönlenir" }
+        deepseek: { label: 'DeepSeek', model: 'deepseek-flash', note: "DeepSeek'in en yeni Flash modeline yönlenir" },
+        claude: { label: 'Claude', model: 'claude-haiku-5-5', note: 'Claude Haiku 5.5' }
     };
 
     const DEFAULT_AI_SETTINGS = {
-        // Preferred provider per task; the other provider is the automatic fallback.
+        // Preferred provider per task; the other providers are the automatic fallbacks.
         taskProviders: { triage: 'deepseek', match: 'deepseek', imageCompare: 'gemini' },
         // Products scoring at or above this are not fetched from Amazon. 0 = never block.
         riskBlockThreshold: 7,
@@ -207,7 +208,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
     // ---- Provider calls ------------------------------------------------------------------
     // A caller returns { text } on success, { retry: true } to try the next key of the same
     // provider, or { retry: false } to skip straight to the next provider.
-    const RETRY_STATUSES = new Set([401, 402, 403, 408, 429, 500, 502, 503, 504]);
+    const RETRY_STATUSES = new Set([401, 402, 403, 408, 429, 500, 502, 503, 504, 529]);
 
     async function callGemini({ key, prompt, images, maxTokens, fetchImpl }) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${PROVIDERS.gemini.model}:generateContent?key=${encodeURIComponent(key)}`;
@@ -262,7 +263,42 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         return { text, model: data?.model || PROVIDERS.deepseek.model };
     }
 
-    const CALLERS = { gemini: callGemini, deepseek: callDeepSeek };
+    async function callClaude({ key, prompt, images, maxTokens, fetchImpl }) {
+        const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': key,
+                'anthropic-version': '2026-10-21',
+                // Extension pages send an Origin header; the API refuses those without this opt-in.
+                'anthropic-dangerous-direct-browser-access': 'true'
+            },
+            body: JSON.stringify({
+                model: PROVIDERS.claude.model,
+                // Haiku 5.5 thinks by default and its thinking would share max_tokens with the JSON
+                // answer; disabling it is allowed at effort high or below. Sampling parameters are rejected.
+                thinking: { type: 'disabled' },
+                output_config: { effort: 'low' },
+                max_tokens: Math.max(1024, maxTokens * 4),
+                system: 'You answer with a single valid JSON object and nothing else.',
+                messages: [{
+                    role: 'user',
+                    content: [
+                        ...images.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mimeType, data: i.data } })),
+                        { type: 'text', text: prompt }
+                    ]
+                }]
+            })
+        });
+        if (!res.ok) return { retry: RETRY_STATUSES.has(res.status), status: res.status, reason: `Claude HTTP ${res.status}` };
+        const data = await res.json();
+        if (data?.stop_reason === 'refusal') return { retry: false, reason: 'Claude: istek reddedildi' };
+        const text = (data?.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+        if (!text) return { retry: false, reason: 'Claude: boş yanıt' };
+        return { text, model: data?.model || PROVIDERS.claude.model };
+    }
+
+    const CALLERS = { gemini: callGemini, deepseek: callDeepSeek, claude: callClaude };
 
     async function runAiTask({ task, prompt, images = [], maxTokens = 300, keys, settings, fetchImpl, onAttempt }) {
         const order = providerOrder(task, settings, keys);

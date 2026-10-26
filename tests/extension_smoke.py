@@ -409,14 +409,17 @@ def run(playwright: Playwright, extension_dir: Path, artifact_dir: Path, result:
                 assert_workspace(page, '.nav-btn[data-target="section-ai"]', "section-ai")
                 page.locator("#gemini-keys-input").fill("AIzaFixtureGeminiKey01\n\nAIzaFixtureGeminiKey01")
                 page.locator("#deepseek-keys-input").fill("sk-fixture-deepseek-01")
+                page.locator("#claude-keys-input").fill("sk-ant-fixture-claude-01")
                 page.locator("#manage-keys-btn").click()
                 wait_js(page, 
-                    "async () => { const d = await chrome.storage.local.get(['geminiApiKeys', 'deepseekApiKeys']);"
-                    " return d.geminiApiKeys?.length === 1 && d.deepseekApiKeys?.length === 1; }"
+                    "async () => { const d = await chrome.storage.local.get(['geminiApiKeys', 'deepseekApiKeys', 'claudeApiKeys']);"
+                    " return d.geminiApiKeys?.length === 1 && d.deepseekApiKeys?.length === 1 && d.claudeApiKeys?.length === 1; }"
                 )
                 assert "Gemini 1" in page.locator("#key-count-label").inner_text()
                 assert "gemini-3.8-flash" in page.locator("#ai-model-gemini").inner_text()
                 assert "deepseek-flash" in page.locator("#ai-model-deepseek").inner_text()
+                assert "Claude 1" in page.locator("#key-count-label").inner_text()
+                assert "claude-haiku-5-5" in page.locator("#ai-model-claude").inner_text()
                 page.locator("#ai-provider-match").select_option("gemini")
                 page.locator("#ai-risk-threshold").select_option("5")
                 page.locator("#ai-match-verification").uncheck()

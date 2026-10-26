@@ -18,7 +18,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         'section-forbidden-cats': ['Kategori kuralları', 'eBay araştırmasında hariç tutulacak ana ve alt kategorileri belirle.'],
         'section-amazon': ['Amazon toplama', 'Kaynağını seç, ürün filtrelerini belirle ve ASIN havuzunu oluştur.'],
         'section-settings': ['Görünüm ayarları', 'Amazon ve eBay sayfalarındaki bilgi ve araçları düzenle.'],
-        'section-ai': ['AI ayarları', 'Gemini ve DeepSeek anahtarlarını, iş başına sağlayıcıyı ve risk kurallarını yönet.']
+        'section-ai': ['AI ayarları', 'Gemini, DeepSeek ve Claude anahtarlarını, iş başına sağlayıcıyı ve risk kurallarını yönet.']
     };
     function selectWorkspace(button, writeHash = true) {
         if (!button) return;
@@ -328,7 +328,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     let bgColor = product.riskScore >= 5 ? "#450a0a" : "#064e3b";
                     let textColor = product.riskScore >= 5 ? "#fca5a5" : "#86efac";
                     let riskText = product.riskScore >= 5 ? "⛔ RİSKLİ" : "DÜŞÜK RİSK TAHMİNİ";
-                    const riskSource = { rule: 'Kural', deepseek: 'DeepSeek', gemini: 'Gemini' }[product.riskSource] || '';
+                    const riskSource = { rule: 'Kural', deepseek: 'DeepSeek', gemini: 'Gemini', claude: 'Claude' }[product.riskSource] || '';
                     const riskDetail = [product.riskReason ? escapeHTML(product.riskReason) : '', riskSource].filter(Boolean).join(' · ');
                     riskAnalysisHtml = `<div class="risk-analysis-result" style="display:block; padding: 8px 15px; border-top: 1px solid #333; font-size: 12px; background-color:${bgColor}; color:${textColor}; font-weight: bold;">Puan: ${product.riskScore}/10 - ${riskText}${riskDetail ? `<br><span style="font-weight:normal;">${riskDetail}</span>` : ''}</div>`;
                     aiBtnText = 'Tekrar';
@@ -429,7 +429,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
             if (!(await hasAnyAiKey())) {
-                return alert("API anahtarı yok. AI ayarları sayfasından Gemini veya DeepSeek anahtarı ekleyin.");
+                return alert("API anahtarı yok. AI ayarları sayfasından Gemini, DeepSeek veya Claude anahtarı ekleyin.");
             }
             btn.disabled = true;
             btn.textContent = '...';
@@ -1191,13 +1191,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function hasAnyAiKey() {
-        const { geminiApiKeys = [], deepseekApiKeys = [] } = await chrome.storage.local.get(['geminiApiKeys', 'deepseekApiKeys']);
-        return geminiApiKeys.length > 0 || deepseekApiKeys.length > 0;
+        const { geminiApiKeys = [], deepseekApiKeys = [], claudeApiKeys = [] } = await chrome.storage.local.get(['geminiApiKeys', 'deepseekApiKeys', 'claudeApiKeys']);
+        return geminiApiKeys.length > 0 || deepseekApiKeys.length > 0 || claudeApiKeys.length > 0;
     }
 
     analyzeRiskBtn.addEventListener('click', async () => {
         if (!(await hasAnyAiKey())) {
-            return alert("API anahtarı yok. AI ayarları sayfasından Gemini veya DeepSeek anahtarı ekleyin.");
+            return alert("API anahtarı yok. AI ayarları sayfasından Gemini, DeepSeek veya Claude anahtarı ekleyin.");
         }
         if (!confirm("Risk analizi başlatılsın mı? Ürünler API limitlerine (429 Hatası) takılmamak için sırayla analiz edilecektir.")) return;
 

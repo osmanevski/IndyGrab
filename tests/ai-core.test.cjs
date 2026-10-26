@@ -120,3 +120,49 @@ test('Gemini request targets gemini-3.8-flash without deprecated sampling parame
     assert.equal(seen.body.contents[0].parts[1].inline_data.data, 'BBBB');
     assert.equal(r.model, 'gemini-3.8-flash');
 });
+
+const claudeOk = text => jsonResponse(200, { model: 'claude-haiku-5-5', stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text }] });
+
+test('Claude request uses the Messages API with base64 images first and low effort; 529 moves to the next key', async () => {
+    const calls = [];
+    const fetchImpl = async (url, init) => {
+        calls.push({ url, init, body: JSON.parse(init.body) });
+        return calls.length === 1 ? jsonResponse(529, {}) : claudeOk('{"riskScore": 3, "reason": "Generic", "amazonQuery": "wool felt coasters"}');
+    };
+    const r = await AI.runAiTask({
+        task: 'triage', prompt: 'json please', images: [{ mimeType: 'image/jpeg', data: 'CCCC' }],
+        keys: { claude: ['sk-ant-first-000', 'sk-ant-second-00'] },
+        settings: { taskProviders: { triage: 'claude' } }, fetchImpl
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.provider, 'claude');
+    assert.equal(r.model, 'claude-haiku-5-5');
+    assert.equal(calls.length, 2, '529 overloaded is retried on the next key');
+    const { url, init, body } = calls[1];
+    assert.equal(url, 'https://api.anthropic.com/v1/messages');
+    assert.equal(init.headers['x-api-key'], 'sk-ant-second-00');
+    assert.equal(init.headers['anthropic-dangerous-direct-browser-access'], 'true');
+    assert.equal(body.model, 'claude-haiku-5-5');
+    assert.deepEqual(body.thinking, { type: 'disabled' }, 'thinking would spend max_tokens before the JSON answer');
+    assert.deepEqual(body.output_config, { effort: 'low' }, 'disabled thinking needs effort high or below');
+    assert.equal('temperature' in body, false, 'sampling parameters are rejected');
+    assert.equal('fallbacks' in body || 'anthropic-beta' in init.headers, false, 'Haiku has no server-side fallback');
+    assert.deepEqual(body.messages[0].content[0], { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'CCCC' } });
+    assert.equal(body.messages[0].content[1].text, 'json please');
+    assert.deepEqual(AI.normalizeTriage(r.json), { riskScore: 3, reason: 'Generic', amazonQuery: 'wool felt coasters' });
+});
+
+test('Claude refusal skips to the next provider instead of burning keys', async () => {
+    const urls = [];
+    const r = await AI.runAiTask({
+        task: 'match', prompt: 'x', keys: { claude: ['sk-ant-one-0000', 'sk-ant-two-0000'], gemini: ['AIza-key-00000'] },
+        settings: { taskProviders: { match: 'claude' } },
+        fetchImpl: async url => {
+            urls.push(url);
+            return url.includes('anthropic') ? jsonResponse(200, { stop_reason: 'refusal', content: [] }) : geminiOk('{"matches": []}');
+        }
+    });
+    assert.equal(r.provider, 'gemini');
+    assert.equal(urls.filter(u => u.includes('anthropic')).length, 1);
+    assert.equal(AI.mergeSettings({ taskProviders: { imageCompare: 'claude' } }).taskProviders.imageCompare, 'claude');
+});

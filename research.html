@@ -584,18 +584,19 @@
 <section id="section-ai" class="ai-section">
             <div class="section-header"><div class="section-title-group"><span class="section-kicker">YAPAY ZEKÂ</span><h2>AI ayarları</h2></div><span id="key-count-label" class="ai-key-summary">0 anahtar</span></div>
             <p class="section-help">Anahtarlar sırayla kullanılır: biri kota ya da hata verince sıradakine, o sağlayıcının anahtarları bitince diğer sağlayıcıya geçilir.</p>
-            <div class="ai-grid">
+            <div class="ai-grid ai-grid-3">
                 <div class="ai-field"><label for="gemini-keys-input">Gemini anahtarları</label><textarea id="gemini-keys-input" class="key-textarea" rows="4" placeholder="Her satıra bir anahtar (AIza…)" spellcheck="false"></textarea><small id="ai-model-gemini">Model: gemini-3.8-flash</small></div>
                 <div class="ai-field"><label for="deepseek-keys-input">DeepSeek anahtarları</label><textarea id="deepseek-keys-input" class="key-textarea" rows="4" placeholder="Her satıra bir anahtar (sk-…)" spellcheck="false"></textarea><small id="ai-model-deepseek">Model: deepseek-flash</small></div>
+                <div class="ai-field"><label for="claude-keys-input">Claude anahtarları</label><textarea id="claude-keys-input" class="key-textarea" rows="4" placeholder="Her satıra bir anahtar (sk-ant-…)" spellcheck="false"></textarea><small id="ai-model-claude">Model: claude-haiku-5-5</small></div>
             </div>
             <div class="ai-actions"><button id="manage-keys-btn" class="action-btn" type="button">Anahtarları kaydet</button><span id="ai-keys-status" role="status" aria-live="polite"></span></div>
 
             <h3>İş başına sağlayıcı</h3>
-            <p class="section-help">Seçilen önce denenir, diğeri yedektir.</p>
+            <p class="section-help">Seçilen önce denenir, diğerleri yedektir.</p>
             <div class="ai-grid ai-grid-3">
-                <div class="ai-field"><label for="ai-provider-triage">Risk ve Amazon arama sorgusu</label><select id="ai-provider-triage"><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option></select></div>
-                <div class="ai-field"><label for="ai-provider-match">Amazon eşleşme doğrulaması</label><select id="ai-provider-match"><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option></select></div>
-                <div class="ai-field"><label for="ai-provider-imageCompare">Satıcı görseli (hash'in kararsız kaldıkları)</label><select id="ai-provider-imageCompare"><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option></select></div>
+                <div class="ai-field"><label for="ai-provider-triage">Risk ve Amazon arama sorgusu</label><select id="ai-provider-triage"><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option><option value="claude">Claude</option></select></div>
+                <div class="ai-field"><label for="ai-provider-match">Amazon eşleşme doğrulaması</label><select id="ai-provider-match"><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option><option value="claude">Claude</option></select></div>
+                <div class="ai-field"><label for="ai-provider-imageCompare">Satıcı görseli (hash'in kararsız kaldıkları)</label><select id="ai-provider-imageCompare"><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option><option value="claude">Claude</option></select></div>
             </div>
 
             <h3>Kurallar</h3>

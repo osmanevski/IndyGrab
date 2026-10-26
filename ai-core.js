@@ -4,16 +4,20 @@
 (function (root) {
     'use strict';
 
+    // model is the default; suggestions seed the model picker before a live list is fetched.
     const PROVIDERS = {
-        gemini: { label: 'Gemini', model: 'gemini-3.8-flash', note: 'Gemini 3.8 Flash' },
+        gemini: { label: 'Gemini', model: 'gemini-3.8-flash', note: 'Gemini 3.8 Flash', suggestions: ['gemini-3.8-flash', 'gemini-3.1-flash-lite'] },
         // DeepSeek keeps one alias for its newest Flash release (DeepSeek-V4.1-Flash as of 2026-09-13).
-        deepseek: { label: 'DeepSeek', model: 'deepseek-flash', note: "DeepSeek'in en yeni Flash modeline yönlenir" },
-        claude: { label: 'Claude', model: 'claude-haiku-5-5', note: 'Claude Haiku 5.5' }
+        deepseek: { label: 'DeepSeek', model: 'deepseek-flash', note: "DeepSeek'in en yeni Flash modeline yönlenir", suggestions: ['deepseek-flash', 'deepseek-v4-pro'] },
+        claude: { label: 'Claude', model: 'claude-haiku-5-5', note: 'Claude Haiku 5.5', suggestions: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] }
     };
+    const MODEL_ID = /^[A-Za-z0-9][\w.:\/-]{1,79}$/;
 
     const DEFAULT_AI_SETTINGS = {
         // Preferred provider per task; the other providers are the automatic fallbacks.
         taskProviders: { triage: 'deepseek', match: 'deepseek', imageCompare: 'gemini' },
+        // Model per provider; an empty or malformed entry falls back to PROVIDERS[p].model.
+        models: Object.fromEntries(Object.entries(PROVIDERS).map(([p, info]) => [p, info.model])),
         // Products scoring at or above this are not fetched from Amazon. 0 = never block.
         riskBlockThreshold: 7,
         // Only AI-confirmed ASINs are saved on eBay → Amazon fetches.
@@ -32,6 +36,12 @@
         for (const task of Object.keys(merged.taskProviders)) {
             if (!PROVIDERS[merged.taskProviders[task]]) merged.taskProviders[task] = DEFAULT_AI_SETTINGS.taskProviders[task];
         }
+        merged.models = { ...DEFAULT_AI_SETTINGS.models, ...(s.models || {}) };
+        for (const p of Object.keys(PROVIDERS)) {
+            const model = String(merged.models[p] || '').trim();
+            merged.models[p] = MODEL_ID.test(model) ? model : PROVIDERS[p].model;
+        }
+        for (const p of Object.keys(merged.models)) if (!PROVIDERS[p]) delete merged.models[p];
         merged.riskBlockThreshold = Number.isFinite(Number(merged.riskBlockThreshold)) ? Number(merged.riskBlockThreshold) : DEFAULT_AI_SETTINGS.riskBlockThreshold;
         merged.matchVerification = merged.matchVerification !== false;
         return merged;
@@ -210,8 +220,14 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
     // provider, or { retry: false } to skip straight to the next provider.
     const RETRY_STATUSES = new Set([401, 402, 403, 408, 429, 500, 502, 503, 504, 529]);
 
-    async function callGemini({ key, prompt, images, maxTokens, fetchImpl }) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${PROVIDERS.gemini.model}:generateContent?key=${encodeURIComponent(key)}`;
+    // thinkingLevel exists from Gemini 3 on; older models would reject it.
+    function geminiThinkingConfig(model) {
+        const version = parseFloat((/^gemini-(\d+(?:\.\d+)?)/.exec(model) || [])[1]);
+        return version >= 3 ? { thinkingLevel: 'LOW' } : undefined;
+    }
+
+    async function callGemini({ key, model, prompt, images, maxTokens, fetchImpl }) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
         const res = await fetchImpl(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -223,7 +239,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
                 // thinking tokens share the output budget, so leave room beyond the JSON answer.
                 generationConfig: {
                     responseMimeType: 'application/json',
-                    thinkingConfig: { thinkingLevel: 'LOW' },
+                    thinkingConfig: geminiThinkingConfig(model),
                     maxOutputTokens: Math.max(1024, maxTokens * 4)
                 }
             })
@@ -232,10 +248,10 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('');
         if (!text) return { retry: false, reason: 'Gemini: ' + (data?.promptFeedback?.blockReason || 'boş yanıt') };
-        return { text, model: data?.modelVersion || PROVIDERS.gemini.model };
+        return { text, model: data?.modelVersion || model };
     }
 
-    async function callDeepSeek({ key, prompt, images, maxTokens, fetchImpl }) {
+    async function callDeepSeek({ key, model, prompt, images, maxTokens, fetchImpl }) {
         const content = images.length
             ? [{ type: 'text', text: prompt }, ...images.map(i => ({ type: 'image_url', image_url: { url: `data:${i.mimeType};base64,${i.data}` } }))]
             : prompt;
@@ -243,7 +259,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
             body: JSON.stringify({
-                model: PROVIDERS.deepseek.model,
+                model,
                 messages: [
                     { role: 'system', content: 'You answer with a single valid json object and nothing else.' },
                     { role: 'user', content }
@@ -260,25 +276,40 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         const data = await res.json();
         const text = data?.choices?.[0]?.message?.content;
         if (!text) return { retry: false, reason: 'DeepSeek: boş yanıt' };
-        return { text, model: data?.model || PROVIDERS.deepseek.model };
+        return { text, model: data?.model || model };
     }
 
-    async function callClaude({ key, prompt, images, maxTokens, fetchImpl }) {
+    const CLAUDE_HEADERS = {
+        'anthropic-version': '2026-10-21',
+        // Extension pages send an Origin header; the API refuses those without this opt-in.
+        'anthropic-dangerous-direct-browser-access': 'true'
+    };
+
+    // Request fields that differ by Claude model. Sampling parameters are rejected on all current ones.
+    function claudeModelOptions(model) {
+        const body = {};
+        const headers = {};
+        // Haiku can switch thinking off (only at effort high or below), so the JSON answer gets the
+        // whole max_tokens; Opus 5.5, Sonnet 5.5 and Fable reject "disabled" and think adaptively.
+        if (/haiku/.test(model)) body.thinking = { type: 'disabled' };
+        // effort errors on Haiku 4.5, Sonnet 4.5 and older models.
+        if (!/claude-(haiku-4|sonnet-4-5|opus-4-[01]|[a-z]+-[0-3]\b|[0-3]-)/.test(model)) body.output_config = { effort: 'low' };
+        // A safety-classifier refusal on these models is re-run server-side on a fallback model.
+        if (/^claude-(opus-5|sonnet-5-5|fable-5)/.test(model)) {
+            body.fallbacks = 'default';
+            headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
+        }
+        return { body, headers };
+    }
+
+    async function callClaude({ key, model, prompt, images, maxTokens, fetchImpl }) {
+        const options = claudeModelOptions(model);
         const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': key,
-                'anthropic-version': '2026-10-21',
-                // Extension pages send an Origin header; the API refuses those without this opt-in.
-                'anthropic-dangerous-direct-browser-access': 'true'
-            },
+            headers: { 'Content-Type': 'application/json', 'x-api-key': key, ...CLAUDE_HEADERS, ...options.headers },
             body: JSON.stringify({
-                model: PROVIDERS.claude.model,
-                // Haiku 5.5 thinks by default and its thinking would share max_tokens with the JSON
-                // answer; disabling it is allowed at effort high or below. Sampling parameters are rejected.
-                thinking: { type: 'disabled' },
-                output_config: { effort: 'low' },
+                model,
+                ...options.body,
                 max_tokens: Math.max(1024, maxTokens * 4),
                 system: 'You answer with a single valid JSON object and nothing else.',
                 messages: [{
@@ -295,20 +326,45 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         if (data?.stop_reason === 'refusal') return { retry: false, reason: 'Claude: istek reddedildi' };
         const text = (data?.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
         if (!text) return { retry: false, reason: 'Claude: boş yanıt' };
-        return { text, model: data?.model || PROVIDERS.claude.model };
+        return { text, model: data?.model || model };
     }
 
     const CALLERS = { gemini: callGemini, deepseek: callDeepSeek, claude: callClaude };
 
+    // Text models the key can use, from the provider's own model list. Throws on HTTP errors.
+    const NON_TEXT_MODEL = /embed|tts|audio|live|image|imagen|veo|aqa|learnlm|gemma/i;
+    async function listModels({ provider, key, fetchImpl }) {
+        let res;
+        if (provider === 'gemini') {
+            res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${encodeURIComponent(key)}`);
+        } else if (provider === 'deepseek') {
+            res = await fetchImpl('https://api.deepseek.com/models', { headers: { Authorization: `Bearer ${key}` } });
+        } else if (provider === 'claude') {
+            res = await fetchImpl('https://api.anthropic.com/v1/models?limit=1000', { headers: { 'x-api-key': key, ...CLAUDE_HEADERS } });
+        } else {
+            throw new Error(`Bilinmeyen sağlayıcı: ${provider}`);
+        }
+        if (!res.ok) throw new Error(`${PROVIDERS[provider].label} HTTP ${res.status}`);
+        const data = await res.json();
+        const ids = provider === 'gemini'
+            ? (data?.models || [])
+                .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+                .map(m => String(m.name || '').replace(/^models\//, ''))
+                .filter(id => id.startsWith('gemini') && !NON_TEXT_MODEL.test(id))
+            : (data?.data || []).map(m => String(m.id || ''));
+        return [...new Set(ids.filter(id => MODEL_ID.test(id)))];
+    }
+
     async function runAiTask({ task, prompt, images = [], maxTokens = 300, keys, settings, fetchImpl, onAttempt }) {
         const order = providerOrder(task, settings, keys);
+        const { models } = mergeSettings(settings);
         if (!order.length) return { error: true, noKeys: true, reason: 'API anahtarı yok' };
         let lastReason = 'Çalışan API anahtarı yok';
         for (const provider of order) {
             for (const key of keys[provider]) {
                 let result;
                 try {
-                    result = await CALLERS[provider]({ key, prompt, images, maxTokens, fetchImpl });
+                    result = await CALLERS[provider]({ key, model: models[provider], prompt, images, maxTokens, fetchImpl });
                 } catch (e) {
                     result = { retry: true, reason: `${PROVIDERS[provider].label}: bağlantı hatası` };
                 }
@@ -326,7 +382,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         PROVIDERS, DEFAULT_AI_SETTINGS, mergeSettings, normalizeKeyList, providerOrder,
         ruleRisk, dHashFromGray, hammingHex, hashVerdict,
         triagePrompt, matchPrompt, imageComparePrompt,
-        parseJsonLoose, normalizeTriage, normalizeMatch, amazonSearchUrlFor, runAiTask
+        parseJsonLoose, normalizeTriage, normalizeMatch, amazonSearchUrlFor, runAiTask, listModels
     };
     root.IndyAI = api;
     if (typeof module !== 'undefined' && module.exports) module.exports = api;

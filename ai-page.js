@@ -36,13 +36,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return Object.fromEntries(Object.entries(KEY_STORE).map(([p, store]) => [p, IndyAI.normalizeKeyList(data[store] || [])]));
     }
 
-    // Configured model plus the model the provider reported in its last successful answer.
-    function renderModels(lastModels = {}) {
+    let lastModelsSeen = {};
+    // Selected model plus the model the provider reported in its last successful answer.
+    function renderModels(lastModels = lastModelsSeen) {
+        lastModelsSeen = lastModels;
         for (const [provider, info] of Object.entries(IndyAI.PROVIDERS)) {
             const el = $(`ai-model-${provider}`);
             if (!el) continue;
             const seen = lastModels[provider];
-            const configured = `Model: ${info.model}${info.note ? ` (${info.note})` : ''}`;
+            const model = $(`ai-model-input-${provider}`).value.trim() || info.model;
+            const isDefault = model === info.model;
+            const configured = `Model: ${model}${isDefault && info.note ? ` (${info.note})` : isDefault ? '' : ' (seçili)'}`;
             el.textContent = seen
                 ? `${configured} · Son yanıt: ${seen.model}, ${new Date(seen.at).toLocaleString('tr-TR')}`
                 : `${configured} · Henüz yanıt alınmadı`;
@@ -68,12 +72,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
     }
 
-    chrome.storage.local.get([...Object.values(KEY_STORE), 'aiSettings', 'aiStats', 'aiLastModels'], data => {
+    chrome.storage.local.get([...Object.values(KEY_STORE), 'aiSettings', 'aiStats', 'aiLastModels', 'aiModelLists'], data => {
         const keys = keysFromStorage(data);
         for (const p of Object.keys(KEY_STORE)) $(`${p}-keys-input`).value = keys[p].join('\n');
         renderKeyCount(keys);
-        renderModels(data.aiLastModels);
         const settings = IndyAI.mergeSettings(data.aiSettings);
+        for (const p of Object.keys(KEY_STORE)) {
+            $(`ai-model-input-${p}`).value = settings.models[p];
+            fillModelList(p, data.aiModelLists?.[p]);
+        }
+        renderModels(data.aiLastModels);
         TASKS.forEach(task => { $(`ai-provider-${task}`).value = settings.taskProviders[task]; });
         $('ai-risk-threshold').value = String(settings.riskBlockThreshold);
         $('ai-match-verification').checked = settings.matchVerification;
@@ -91,16 +99,54 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Suggestions: the provider's live list when fetched, otherwise the built-in defaults.
+    function fillModelList(provider, fetched) {
+        const ids = [...new Set([...(fetched?.length ? fetched : []), ...IndyAI.PROVIDERS[provider].suggestions])];
+        $(`ai-model-list-${provider}`).replaceChildren(...ids.map(id => Object.assign(document.createElement('option'), { value: id })));
+    }
+
+    $('ai-models-refresh').addEventListener('click', async () => {
+        const status = $('ai-keys-status');
+        const btn = $('ai-models-refresh');
+        btn.disabled = true;
+        status.textContent = 'Model listeleri alınıyor…';
+        try {
+            const data = await chrome.storage.local.get([...Object.values(KEY_STORE), 'aiModelLists']);
+            const keys = keysFromStorage(data);
+            const lists = { ...(data.aiModelLists || {}) };
+            const notes = [];
+            for (const p of Object.keys(KEY_STORE)) {
+                const label = IndyAI.PROVIDERS[p].label;
+                if (!keys[p].length) { notes.push(`${label}: anahtar yok`); continue; }
+                try {
+                    lists[p] = await IndyAI.listModels({ provider: p, key: keys[p][0], fetchImpl: (url, init) => fetch(url, init) });
+                    fillModelList(p, lists[p]);
+                    notes.push(`${label}: ${lists[p].length} model`);
+                } catch (e) {
+                    notes.push(`${label}: alınamadı (${e.message})`);
+                }
+            }
+            await chrome.storage.local.set({ aiModelLists: lists });
+            status.textContent = notes.join(' · ');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
     function saveSettings() {
         chrome.storage.local.get('aiSettings', data => {
             const settings = IndyAI.mergeSettings(data.aiSettings);
             TASKS.forEach(task => { settings.taskProviders[task] = $(`ai-provider-${task}`).value; });
             settings.riskBlockThreshold = Number($('ai-risk-threshold').value);
             settings.matchVerification = $('ai-match-verification').checked;
-            chrome.storage.local.set({ aiSettings: settings });
+            for (const p of Object.keys(KEY_STORE)) settings.models[p] = $(`ai-model-input-${p}`).value.trim();
+            const merged = IndyAI.mergeSettings(settings);
+            for (const p of Object.keys(KEY_STORE)) $(`ai-model-input-${p}`).value = merged.models[p];
+            renderModels();
+            chrome.storage.local.set({ aiSettings: merged });
         });
     }
-    [...TASKS.map(task => `ai-provider-${task}`), 'ai-risk-threshold', 'ai-match-verification']
+    [...TASKS.map(task => `ai-provider-${task}`), ...Object.keys(KEY_STORE).map(p => `ai-model-input-${p}`), 'ai-risk-threshold', 'ai-match-verification']
         .forEach(id => $(id).addEventListener('change', saveSettings));
 
     $('ai-stats-reset').addEventListener('click', () => chrome.storage.local.set({ aiStats: {} }));

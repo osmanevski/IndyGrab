@@ -420,6 +420,13 @@ def run(playwright: Playwright, extension_dir: Path, artifact_dir: Path, result:
                 assert "deepseek-flash" in page.locator("#ai-model-deepseek").inner_text()
                 assert "Claude 1" in page.locator("#key-count-label").inner_text()
                 assert "claude-haiku-5-5" in page.locator("#ai-model-claude").inner_text()
+                page.locator("#ai-model-input-claude").fill("claude-sonnet-5-5")
+                page.locator("#ai-model-input-claude").dispatch_event("change")
+                wait_js(page,
+                    "async () => ((await chrome.storage.local.get('aiSettings')).aiSettings || {}).models?.claude === 'claude-sonnet-5-5'"
+                )
+                assert "claude-sonnet-5-5 (seçili)" in page.locator("#ai-model-claude").inner_text()
+                assert page.locator("#ai-model-list-claude option").count() >= 3
                 page.locator("#ai-provider-match").select_option("gemini")
                 page.locator("#ai-risk-threshold").select_option("5")
                 page.locator("#ai-match-verification").uncheck()

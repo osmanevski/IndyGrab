@@ -159,6 +159,8 @@ body #section-ai .ai-field small { color:var(--muted); font-size:11px; line-heig
 body #section-ai .ai-check { flex-direction:row; align-items:center; gap:10px; align-self:end; min-height:36px; }
 body #section-ai .ai-check > label { color:var(--text); font-weight:500; }
 body #section-ai .ai-check input { width:auto; min-height:0; margin:0; }
+body #section-ai .ai-field > label.ai-sublabel { margin-top:4px; }
+body #section-ai .ai-model-input { width:100%; font:12px/1.4 ui-monospace,monospace; }
 body #section-ai textarea.key-textarea { width:100%; min-height:96px; resize:vertical; font:12px/1.6 ui-monospace,monospace; }
 body #section-ai h3 { max-width:880px; margin:28px 0 6px; padding-top:22px; border-top:1px solid var(--border); font-size:14px; color:var(--text); }
 body #section-ai .section-help { max-width:700px; margin:0 0 14px; font-size:12px; }

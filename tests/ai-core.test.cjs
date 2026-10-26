@@ -166,3 +166,45 @@ test('Claude refusal skips to the next provider instead of burning keys', async 
     assert.equal(urls.filter(u => u.includes('anthropic')).length, 1);
     assert.equal(AI.mergeSettings({ taskProviders: { imageCompare: 'claude' } }).taskProviders.imageCompare, 'claude');
 });
+
+test('selected models reach each provider and Claude request fields follow the model', async () => {
+    const s = AI.mergeSettings({ models: { gemini: ' gemini-2.5-flash ', deepseek: 'bad model id!', claude: 'claude-opus-5-5', openai: 'x' } });
+    assert.deepEqual(s.models, { gemini: 'gemini-2.5-flash', deepseek: 'deepseek-flash', claude: 'claude-opus-5-5' });
+    assert.equal(AI.mergeSettings({}).models.claude, 'claude-haiku-5-5');
+
+    const seen = [];
+    const fetchImpl = async (url, init) => { seen.push({ url, init, body: JSON.parse(init.body) }); return jsonResponse(500, {}); };
+    await AI.runAiTask({
+        task: 'triage', prompt: 'x', keys: { gemini: ['AIza-key-00000'], deepseek: ['sk-deepseek-000'], claude: ['sk-ant-key-0000'] },
+        settings: { models: s.models, taskProviders: { triage: 'gemini' } }, fetchImpl
+    });
+    const [gemini, deepseek, claude] = seen;
+    assert.match(gemini.url, /models\/gemini-2\.5-flash:generateContent/);
+    assert.equal(gemini.body.generationConfig.thinkingConfig, undefined, 'thinkingLevel is Gemini 3+ only');
+    assert.equal(deepseek.body.model, 'deepseek-flash');
+    assert.equal(claude.body.model, 'claude-opus-5-5');
+    assert.equal('thinking' in claude.body, false, 'Opus 5.5 rejects disabled thinking');
+    assert.deepEqual(claude.body.output_config, { effort: 'low' });
+    assert.equal(claude.body.fallbacks, 'default');
+    assert.equal(claude.init.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+});
+
+test('live model lists keep text models only', async () => {
+    const gemini = await AI.listModels({
+        provider: 'gemini', key: 'AIza-key-00000',
+        fetchImpl: async () => jsonResponse(200, { models: [
+            { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-embedding-001', supportedGenerationMethods: ['embedContent'] },
+            { name: 'models/gemini-3.8-flash-tts', supportedGenerationMethods: ['generateContent'] }
+        ] })
+    });
+    assert.deepEqual(gemini, ['gemini-3.8-flash']);
+    let claudeInit;
+    const claude = await AI.listModels({
+        provider: 'claude', key: 'sk-ant-key-0000',
+        fetchImpl: async (url, init) => { claudeInit = init; return jsonResponse(200, { data: [{ id: 'claude-haiku-5-5' }, { id: 'claude-sonnet-5-5' }] }); }
+    });
+    assert.deepEqual(claude, ['claude-haiku-5-5', 'claude-sonnet-5-5']);
+    assert.equal(claudeInit.headers['x-api-key'], 'sk-ant-key-0000');
+    await assert.rejects(AI.listModels({ provider: 'deepseek', key: 'sk-x-00000000', fetchImpl: async () => jsonResponse(401, {}) }), /DeepSeek HTTP 401/);
+});

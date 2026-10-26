@@ -68,8 +68,9 @@ Claude %4 / %5. Bunlar hesap genelidir; görev veya oturum bazında maliyet ayr�
 # AI katmanı (13 Eylül)
 
 - `ai-core.js`: sağlayıcı-bağımsız katman. Gemini (`gemini-3.8-flash`, sampling parametresi yok, düşünme LOW) ve DeepSeek
-  (`deepseek-flash` = en yeni Flash, 13 Eylül itibarıyla V4.1; düşünme modu kapalı, JSON modu) anahtar kuyrukları: 401/402/403/408/429/5xx
-  sıradaki anahtara, 400 ve boş yanıt diğer sağlayıcıya geçer. Kural riski, dHash, istemler.
+  (`deepseek-flash` = en yeni Flash, 13 Eylül itibarıyla V4.1; düşünme modu kapalı, JSON modu) sağlayıcı başına tek anahtar
+  (2026-10-26: çoklu anahtar rotasyonu kaldırıldı; Claude eklendi). 408/429/5xx/529 aynı anahtarla bir kez yeniden
+  denenir, diğer hatalar ve boş yanıt sıradaki sağlayıcıya geçer. Kural riski, dHash, istemler.
 - Ö2/Ö3/Ö5: yeni keşfedilen üründe otomatik AI yok. Amazon çekiminden hemen önce kural,
   kuraldan geçerse tek AI isteği risk + temiz Amazon sorgusu üretir; eşik (varsayılan 7)
   ve üstü `fetched` + `fetchSkipReason` ile atlanır. AI yoksa orijinal sorguyla çekilir.

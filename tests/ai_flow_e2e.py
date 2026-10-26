@@ -156,7 +156,7 @@ def main() -> int:
 
             # 2) Fetch-all queue with a VeRO product: rule skip, no tab, no AI call.
             risky = product("e2e-risky", "Nike Air Max 90 Running Shoes")
-            worker.evaluate("d => chrome.storage.local.set(d)", {"deepseekApiKeys": ["sk-fixture-deepseek-01"], "memoryAsins": [], "potentialProducts": [risky]})
+            worker.evaluate("d => chrome.storage.local.set(d)", {"deepseekApiKey": "sk-fixture-deepseek-01", "memoryAsins": [], "potentialProducts": [risky]})
             tabs_before = len(ctx.pages)
             started = page.evaluate("chrome.runtime.sendMessage({action: 'startFetchAllQueue'})")
             check(started.get("status") == "started", f"fetch queue did not start: {started}")
@@ -198,7 +198,7 @@ def main() -> int:
             deepseek_calls.clear()
             amazon_queries.clear()
             nokey = product("e2e-nokey", "Woven Storage Basket Large")
-            worker.evaluate("d => chrome.storage.local.set(d)", {"deepseekApiKeys": [], "geminiApiKeys": [], "memoryAsins": [], "potentialProducts": [nokey]})
+            worker.evaluate("d => chrome.storage.local.set(d)", {"deepseekApiKey": "", "geminiApiKey": "", "memoryAsins": [], "potentialProducts": [nokey]})
             fetch_in_owned_tab(nokey)
             got = product_by_id("e2e-nokey")
             check(not deepseek_calls, "no-key run must not call the AI")

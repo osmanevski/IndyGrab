@@ -26,7 +26,7 @@ Amazon ve eBay üzerinde dropshipping / online arbitraj için ürün araştırma
 - VeRO / marka / tehlikeli ürün için önce kural tabanlı, sonra AI destekli risk puanı.
 - Amazon araması için başlık temizleme ve eBay ürünüyle Amazon sonucunun eşleşme kontrolü.
 - Aynı ürünü satan başka satıcıları bulmak için görsel karşılaştırma.
-- Google Gemini, DeepSeek ve Anthropic Claude desteklenir; kendi API anahtarlarınızla çalışır. Anahtar girilmezse eklenti AI'sız akışla devam eder.
+- Google Gemini, DeepSeek ve Anthropic Claude desteklenir; her sağlayıcı için kendi API anahtarınızla çalışır. Anahtar girilmezse eklenti AI'sız akışla devam eder.
 
 **Yardımcı araçlar**
 - Mixer: ASIN listelerini karıştırma, tekrarları ayıklama, kopyalama ve indirme.
@@ -41,7 +41,7 @@ Amazon ve eBay üzerinde dropshipping / online arbitraj için ürün araştırma
    ```
 2. Chrome'da `chrome://extensions` sayfasını açın ve sağ üstten **Geliştirici modu**'nu etkinleştirin.
 3. **Paketlenmemiş öğe yükle** ile klasörü seçin.
-4. AI özellikleri için ana paneldeki AI bölümüne kendi [Gemini](https://aistudio.google.com/app/apikey) , DeepSeek ve/veya [Claude](https://platform.claude.com/settings/keys) anahtarınızı girin.
+4. AI özellikleri için ana paneldeki AI bölümüne kendi [Gemini](https://aistudio.google.com/app/apikey), DeepSeek ve/veya [Claude](https://platform.claude.com/settings/keys) anahtarınızı girin.
 
 Güncellemek için klasörde `git pull` çalıştırıp `chrome://extensions` sayfasında eklentiyi yenileyin. Windows'ta aynı işi `IndyGrab-Guncelle.bat` yapar; yerelde değişiklik varsa güncellemeden durur.
 

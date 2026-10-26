@@ -1,4 +1,4 @@
-// Shared AI layer for the service worker: provider key queues (Gemini, DeepSeek, Claude),
+// Shared AI layer for the service worker: one API key per provider (Gemini, DeepSeek, Claude),
 // deterministic risk rules, perceptual image hash and prompt/response handling.
 // No DOM and no chrome.* access here, so the same file runs under node tests.
 (function (root) {
@@ -47,15 +47,39 @@
         return merged;
     }
 
-    function normalizeKeyList(input) {
-        const list = Array.isArray(input) ? input : String(input || '').split(/\r?\n/);
-        return [...new Set(list.map(k => String(k).trim()).filter(k => k.length > 10))];
+    // One API key per provider, stored as a string. Older versions kept a list per provider
+    // (<provider>ApiKeys); its first entry is taken over by migrateKeyStorage.
+    const KEY_STORAGE = { gemini: 'geminiApiKey', deepseek: 'deepseekApiKey', claude: 'claudeApiKey' };
+    const LEGACY_KEY_STORAGE = { gemini: 'geminiApiKeys', deepseek: 'deepseekApiKeys', claude: 'claudeApiKeys' };
+
+    function normalizeKey(input) {
+        const key = String(input || '').trim();
+        return key.length > 10 && !/\s/.test(key) ? key : '';
+    }
+
+    // data: chrome.storage.local values for KEY_STORAGE and LEGACY_KEY_STORAGE names. While a
+    // legacy list exists it wins: the oldest versions left a stale single geminiApiKey beside it.
+    function keysFromStorage(data) {
+        const d = data || {};
+        return Object.fromEntries(Object.keys(PROVIDERS).map(p => {
+            const legacy = d[LEGACY_KEY_STORAGE[p]];
+            if (Array.isArray(legacy)) return [p, legacy.map(normalizeKey).find(Boolean) || ''];
+            return [p, normalizeKey(d[KEY_STORAGE[p]])];
+        }));
+    }
+
+    // null when storage already uses single keys; otherwise what to write and which lists to drop.
+    function migrateKeyStorage(data) {
+        const remove = Object.values(LEGACY_KEY_STORAGE).filter(name => data && data[name] !== undefined);
+        if (!remove.length) return null;
+        const keys = keysFromStorage(data);
+        return { set: Object.fromEntries(Object.entries(KEY_STORAGE).map(([p, name]) => [name, keys[p]])), remove };
     }
 
     function providerOrder(task, settings, keys) {
         const preferred = mergeSettings(settings).taskProviders[task] || 'gemini';
         const order = [preferred, ...Object.keys(PROVIDERS).filter(p => p !== preferred)];
-        return order.filter(p => Array.isArray(keys && keys[p]) && keys[p].length > 0);
+        return order.filter(p => !!normalizeKey(keys && keys[p]));
     }
 
     // ---- Deterministic risk rules (Ö3) -------------------------------------------------
@@ -216,9 +240,21 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
     }
 
     // ---- Provider calls ------------------------------------------------------------------
-    // A caller returns { text } on success, { retry: true } to try the next key of the same
-    // provider, or { retry: false } to skip straight to the next provider.
-    const RETRY_STATUSES = new Set([401, 402, 403, 408, 429, 500, 502, 503, 504, 529]);
+    // A caller returns { text } on success, { retry: true } for a temporary failure worth one
+    // more try with the same key, or { retry: false } to move straight to the next provider.
+    const TRANSIENT_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529]);
+    const RETRY_DELAY_MS = 2000;
+    const RETRY_DELAY_MAX_MS = 10000;
+
+    function httpFailure(label, res) {
+        const retryAfter = Number(res.headers?.get?.('retry-after'));
+        return {
+            retry: TRANSIENT_STATUSES.has(res.status),
+            status: res.status,
+            retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined,
+            reason: `${label} HTTP ${res.status}`
+        };
+    }
 
     // thinkingLevel exists from Gemini 3 on; older models would reject it.
     function geminiThinkingConfig(model) {
@@ -244,7 +280,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
                 }
             })
         });
-        if (!res.ok) return { retry: RETRY_STATUSES.has(res.status), status: res.status, reason: `Gemini HTTP ${res.status}` };
+        if (!res.ok) return httpFailure('Gemini', res);
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('');
         if (!text) return { retry: false, reason: 'Gemini: ' + (data?.promptFeedback?.blockReason || 'boş yanıt') };
@@ -272,7 +308,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
                 max_tokens: maxTokens
             })
         });
-        if (!res.ok) return { retry: RETRY_STATUSES.has(res.status), status: res.status, reason: `DeepSeek HTTP ${res.status}` };
+        if (!res.ok) return httpFailure('DeepSeek', res);
         const data = await res.json();
         const text = data?.choices?.[0]?.message?.content;
         if (!text) return { retry: false, reason: 'DeepSeek: boş yanıt' };
@@ -321,7 +357,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
                 }]
             })
         });
-        if (!res.ok) return { retry: RETRY_STATUSES.has(res.status), status: res.status, reason: `Claude HTTP ${res.status}` };
+        if (!res.ok) return httpFailure('Claude', res);
         const data = await res.json();
         if (data?.stop_reason === 'refusal') return { retry: false, reason: 'Claude: istek reddedildi' };
         const text = (data?.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
@@ -355,13 +391,18 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         return [...new Set(ids.filter(id => MODEL_ID.test(id)))];
     }
 
-    async function runAiTask({ task, prompt, images = [], maxTokens = 300, keys, settings, fetchImpl, onAttempt }) {
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    async function runAiTask({ task, prompt, images = [], maxTokens = 300, keys, settings, fetchImpl, onAttempt, sleepImpl = wait }) {
         const order = providerOrder(task, settings, keys);
         const { models } = mergeSettings(settings);
         if (!order.length) return { error: true, noKeys: true, reason: 'API anahtarı yok' };
-        let lastReason = 'Çalışan API anahtarı yok';
+        let lastReason = 'AI yanıt vermedi';
         for (const provider of order) {
-            for (const key of keys[provider]) {
+            const key = normalizeKey(keys[provider]);
+            let delay = RETRY_DELAY_MS;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                if (attempt) await sleepImpl(Math.min(RETRY_DELAY_MAX_MS, delay));
                 let result;
                 try {
                     result = await CALLERS[provider]({ key, model: models[provider], prompt, images, maxTokens, fetchImpl });
@@ -372,14 +413,16 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
                 if (onAttempt) onAttempt({ task, provider, ok: !!json, status: result.status || (json ? 200 : 0) });
                 if (json) return { ok: true, json, provider, model: result.model };
                 lastReason = result.text !== undefined ? `${PROVIDERS[provider].label}: yanıt çözülemedi` : (result.reason || lastReason);
-                if (result.text === undefined && result.retry === false) break;
+                if (result.text !== undefined || !result.retry) break;
+                delay = result.retryAfterMs || RETRY_DELAY_MS;
             }
         }
         return { error: true, reason: lastReason };
     }
 
     const api = {
-        PROVIDERS, DEFAULT_AI_SETTINGS, mergeSettings, normalizeKeyList, providerOrder,
+        PROVIDERS, DEFAULT_AI_SETTINGS, mergeSettings, KEY_STORAGE, LEGACY_KEY_STORAGE,
+        normalizeKey, keysFromStorage, migrateKeyStorage, providerOrder,
         ruleRisk, dHashFromGray, hammingHex, hashVerdict,
         triagePrompt, matchPrompt, imageComparePrompt,
         parseJsonLoose, normalizeTriage, normalizeMatch, amazonSearchUrlFor, runAiTask, listModels

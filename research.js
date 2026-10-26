@@ -1191,15 +1191,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function hasAnyAiKey() {
-        const { geminiApiKeys = [], deepseekApiKeys = [], claudeApiKeys = [] } = await chrome.storage.local.get(['geminiApiKeys', 'deepseekApiKeys', 'claudeApiKeys']);
-        return geminiApiKeys.length > 0 || deepseekApiKeys.length > 0 || claudeApiKeys.length > 0;
+        const names = [...Object.values(IndyAI.KEY_STORAGE), ...Object.values(IndyAI.LEGACY_KEY_STORAGE)];
+        return Object.values(IndyAI.keysFromStorage(await chrome.storage.local.get(names))).some(Boolean);
     }
 
     analyzeRiskBtn.addEventListener('click', async () => {
         if (!(await hasAnyAiKey())) {
             return alert("API anahtarı yok. AI ayarları sayfasından Gemini, DeepSeek veya Claude anahtarı ekleyin.");
         }
-        if (!confirm("Risk analizi başlatılsın mı? Ürünler API limitlerine (429 Hatası) takılmamak için sırayla analiz edilecektir.")) return;
+        if (!confirm("Risk analizi başlatılsın mı? Puanı olmayan ürünler sırayla analiz edilecek.")) return;
 
         const progressText = document.getElementById('progress-text');
         analyzeRiskBtn.disabled = true;

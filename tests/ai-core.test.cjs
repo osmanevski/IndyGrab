@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const AI = require('../ai-core.js');
+const noSleep = async () => {};
 
 const jsonResponse = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 const deepseekOk = content => jsonResponse(200, { model: 'DeepSeek-V4.1-Flash', choices: [{ message: { content } }] });
@@ -38,10 +39,12 @@ test('settings merge keeps defaults and rejects unknown providers', () => {
     assert.equal(s.taskProviders.imageCompare, 'gemini');
     assert.equal(s.riskBlockThreshold, 5);
     assert.equal(s.matchVerification, true);
-    assert.deepEqual(AI.normalizeKeyList('sk-aaaaaaaaaaaa\n\n  sk-aaaaaaaaaaaa \nshort\nsk-bbbbbbbbbbbb'), ['sk-aaaaaaaaaaaa', 'sk-bbbbbbbbbbbb']);
+    assert.equal(AI.normalizeKey('  sk-aaaaaaaaaaaa \n'), 'sk-aaaaaaaaaaaa');
+    assert.equal(AI.normalizeKey('short'), '');
+    assert.equal(AI.normalizeKey('sk-aaaaaaaaaaaa sk-bbbbbbbbbbbb'), '', 'two keys pasted together are rejected');
 });
 
-test('DeepSeek request uses deepseek-flash, JSON mode and data-URL images; 429 moves to the next key', async () => {
+test('DeepSeek request uses deepseek-flash, JSON mode and data-URL images; 429 is retried once with the same key', async () => {
     const calls = [];
     const fetchImpl = async (url, init) => {
         calls.push({ url, init, body: JSON.parse(init.body) });
@@ -49,15 +52,15 @@ test('DeepSeek request uses deepseek-flash, JSON mode and data-URL images; 429 m
     };
     const r = await AI.runAiTask({
         task: 'triage', prompt: 'json please', images: [{ mimeType: 'image/jpeg', data: 'AAAA' }],
-        keys: { deepseek: ['sk-first-key-000', 'sk-second-key-00'], gemini: ['AIza-gemini-key-0'] },
-        settings: {}, fetchImpl
+        keys: { deepseek: 'sk-first-key-000', gemini: 'AIza-gemini-key-0' },
+        settings: {}, fetchImpl, sleepImpl: noSleep
     });
     assert.equal(r.ok, true);
     assert.equal(r.provider, 'deepseek');
     assert.equal(r.model, 'DeepSeek-V4.1-Flash', 'answering model comes from the response');
     assert.equal(calls.length, 2);
     assert.equal(calls[1].url, 'https://api.deepseek.com/chat/completions');
-    assert.equal(calls[1].init.headers.Authorization, 'Bearer sk-second-key-00');
+    assert.equal(calls[1].init.headers.Authorization, 'Bearer sk-first-key-000');
     assert.equal(calls[1].body.model, 'deepseek-flash');
     assert.deepEqual(calls[1].body.response_format, { type: 'json_object' });
     assert.deepEqual(calls[1].body.thinking, { type: 'disabled' }, 'thinking would spend max_tokens before the JSON answer');
@@ -66,7 +69,7 @@ test('DeepSeek request uses deepseek-flash, JSON mode and data-URL images; 429 m
     assert.deepEqual(AI.normalizeTriage(r.json), { riskScore: 2, reason: 'Generic', amazonQuery: 'bamboo cutting board' });
 });
 
-test('exhausted preferred provider falls back to the other provider; 400 skips remaining keys', async () => {
+test('failed preferred provider falls back to the next provider; 400 is not retried', async () => {
     const urls = [];
     const fetchImpl = async url => {
         urls.push(url);
@@ -76,21 +79,23 @@ test('exhausted preferred provider falls back to the other provider; 400 skips r
     const candidates = [{ asin: 'B0AAAAAAA1', title: 'a' }, { asin: 'B0AAAAAAA2', title: 'b' }];
     const attempts = [];
     const r = await AI.runAiTask({
-        task: 'match', prompt: 'x', keys: { deepseek: ['sk-one-000000', 'sk-two-000000'], gemini: ['AIza-key-00000'] },
+        task: 'match', prompt: 'x', keys: { deepseek: 'sk-one-000000', gemini: 'AIza-key-00000' },
         settings: { taskProviders: { match: 'deepseek' } }, fetchImpl, onAttempt: a => attempts.push(a)
     });
     assert.equal(r.provider, 'gemini');
-    assert.equal(urls.filter(u => u.includes('deepseek')).length, 1, '400 must not burn the second DeepSeek key');
+    assert.equal(urls.filter(u => u.includes('deepseek')).length, 1, '400 is not a temporary error');
     assert.match(urls[1], /gemini-3\.8-flash:generateContent/);
     assert.deepEqual(AI.normalizeMatch(r.json, candidates), ['B0AAAAAAA1']);
     assert.deepEqual(attempts.map(a => [a.provider, a.ok]), [['deepseek', false], ['gemini', true]]);
 });
 
 test('no keys and total failure are reported as errors, not empty successes', async () => {
-    const none = await AI.runAiTask({ task: 'triage', prompt: 'x', keys: { gemini: [], deepseek: [] }, settings: {}, fetchImpl: async () => { throw new Error('unused'); } });
+    const none = await AI.runAiTask({ task: 'triage', prompt: 'x', keys: { gemini: '', deepseek: '' }, settings: {}, fetchImpl: async () => { throw new Error('unused'); } });
     assert.equal(none.error, true);
     assert.equal(none.noKeys, true);
-    const down = await AI.runAiTask({ task: 'triage', prompt: 'x', keys: { gemini: ['AIza-key-00000'] }, settings: {}, fetchImpl: async () => { throw new Error('offline'); } });
+    let tries = 0;
+    const down = await AI.runAiTask({ task: 'triage', prompt: 'x', keys: { gemini: 'AIza-key-00000' }, settings: {}, sleepImpl: noSleep, fetchImpl: async () => { tries++; throw new Error('offline'); } });
+    assert.equal(tries, 2, 'a connection error is retried once');
     assert.equal(down.error, true);
     assert.match(down.reason, /bağlantı/);
     assert.equal(AI.normalizeMatch({ matches: 'nope' }, []), null);
@@ -109,7 +114,7 @@ test('Gemini request targets gemini-3.8-flash without deprecated sampling parame
     let seen;
     const r = await AI.runAiTask({
         task: 'imageCompare', prompt: 'x', images: [{ mimeType: 'image/jpeg', data: 'BBBB' }],
-        keys: { gemini: ['AIza-key-00000'] }, settings: {},
+        keys: { gemini: 'AIza-key-00000' }, settings: {},
         fetchImpl: async (url, init) => { seen = { url, body: JSON.parse(init.body) }; return geminiOk('{"isMatch": true}'); }
     });
     assert.equal(AI.PROVIDERS.gemini.model, 'gemini-3.8-flash');
@@ -123,24 +128,26 @@ test('Gemini request targets gemini-3.8-flash without deprecated sampling parame
 
 const claudeOk = text => jsonResponse(200, { model: 'claude-haiku-5-5', stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text }] });
 
-test('Claude request uses the Messages API with base64 images first and low effort; 529 moves to the next key', async () => {
+test('Claude request uses the Messages API with base64 images first and low effort; 529 waits for retry-after and retries', async () => {
     const calls = [];
+    const sleeps = [];
     const fetchImpl = async (url, init) => {
         calls.push({ url, init, body: JSON.parse(init.body) });
-        return calls.length === 1 ? jsonResponse(529, {}) : claudeOk('{"riskScore": 3, "reason": "Generic", "amazonQuery": "wool felt coasters"}');
+        return calls.length === 1 ? { ...jsonResponse(529, {}), headers: new Map([['retry-after', '3']]) } : claudeOk('{"riskScore": 3, "reason": "Generic", "amazonQuery": "wool felt coasters"}');
     };
     const r = await AI.runAiTask({
         task: 'triage', prompt: 'json please', images: [{ mimeType: 'image/jpeg', data: 'CCCC' }],
-        keys: { claude: ['sk-ant-first-000', 'sk-ant-second-00'] },
-        settings: { taskProviders: { triage: 'claude' } }, fetchImpl
+        keys: { claude: 'sk-ant-first-000' },
+        settings: { taskProviders: { triage: 'claude' } }, fetchImpl, sleepImpl: async ms => sleeps.push(ms)
     });
+    assert.deepEqual(sleeps, [3000]);
     assert.equal(r.ok, true);
     assert.equal(r.provider, 'claude');
     assert.equal(r.model, 'claude-haiku-5-5');
-    assert.equal(calls.length, 2, '529 overloaded is retried on the next key');
+    assert.equal(calls.length, 2, '529 overloaded is retried once');
     const { url, init, body } = calls[1];
     assert.equal(url, 'https://api.anthropic.com/v1/messages');
-    assert.equal(init.headers['x-api-key'], 'sk-ant-second-00');
+    assert.equal(init.headers['x-api-key'], 'sk-ant-first-000');
     assert.equal(init.headers['anthropic-dangerous-direct-browser-access'], 'true');
     assert.equal(body.model, 'claude-haiku-5-5');
     assert.deepEqual(body.thinking, { type: 'disabled' }, 'thinking would spend max_tokens before the JSON answer');
@@ -152,10 +159,10 @@ test('Claude request uses the Messages API with base64 images first and low effo
     assert.deepEqual(AI.normalizeTriage(r.json), { riskScore: 3, reason: 'Generic', amazonQuery: 'wool felt coasters' });
 });
 
-test('Claude refusal skips to the next provider instead of burning keys', async () => {
+test('Claude refusal skips to the next provider without a retry', async () => {
     const urls = [];
     const r = await AI.runAiTask({
-        task: 'match', prompt: 'x', keys: { claude: ['sk-ant-one-0000', 'sk-ant-two-0000'], gemini: ['AIza-key-00000'] },
+        task: 'match', prompt: 'x', keys: { claude: 'sk-ant-one-0000', gemini: 'AIza-key-00000' },
         settings: { taskProviders: { match: 'claude' } },
         fetchImpl: async url => {
             urls.push(url);
@@ -175,10 +182,11 @@ test('selected models reach each provider and Claude request fields follow the m
     const seen = [];
     const fetchImpl = async (url, init) => { seen.push({ url, init, body: JSON.parse(init.body) }); return jsonResponse(500, {}); };
     await AI.runAiTask({
-        task: 'triage', prompt: 'x', keys: { gemini: ['AIza-key-00000'], deepseek: ['sk-deepseek-000'], claude: ['sk-ant-key-0000'] },
-        settings: { models: s.models, taskProviders: { triage: 'gemini' } }, fetchImpl
+        task: 'triage', prompt: 'x', keys: { gemini: 'AIza-key-00000', deepseek: 'sk-deepseek-000', claude: 'sk-ant-key-0000' },
+        settings: { models: s.models, taskProviders: { triage: 'gemini' } }, fetchImpl, sleepImpl: noSleep
     });
-    const [gemini, deepseek, claude] = seen;
+    assert.equal(seen.length, 6, 'each provider: first try + one retry on 500');
+    const [gemini, deepseek, claude] = [seen[0], seen[2], seen[4]];
     assert.match(gemini.url, /models\/gemini-2\.5-flash:generateContent/);
     assert.equal(gemini.body.generationConfig.thinkingConfig, undefined, 'thinkingLevel is Gemini 3+ only');
     assert.equal(deepseek.body.model, 'deepseek-flash');
@@ -207,4 +215,14 @@ test('live model lists keep text models only', async () => {
     assert.deepEqual(claude, ['claude-haiku-5-5', 'claude-sonnet-5-5']);
     assert.equal(claudeInit.headers['x-api-key'], 'sk-ant-key-0000');
     await assert.rejects(AI.listModels({ provider: 'deepseek', key: 'sk-x-00000000', fetchImpl: async () => jsonResponse(401, {}) }), /DeepSeek HTTP 401/);
+});
+
+test('legacy key lists migrate to one key per provider', () => {
+    const legacy = { geminiApiKey: 'AIza-stale-single-0', geminiApiKeys: ['AIza-list-first-00', 'AIza-list-second-0'], deepseekApiKeys: [], claudeApiKey: 'sk-ant-current-00' };
+    assert.deepEqual(AI.keysFromStorage(legacy), { gemini: 'AIza-list-first-00', deepseek: '', claude: 'sk-ant-current-00' });
+    const m = AI.migrateKeyStorage(legacy);
+    assert.deepEqual(m.set, { geminiApiKey: 'AIza-list-first-00', deepseekApiKey: '', claudeApiKey: 'sk-ant-current-00' });
+    assert.deepEqual(m.remove.sort(), ['deepseekApiKeys', 'geminiApiKeys']);
+    assert.equal(AI.migrateKeyStorage(m.set), null);
+    assert.deepEqual(AI.providerOrder('match', {}, AI.keysFromStorage(m.set)), ['gemini', 'claude']);
 });

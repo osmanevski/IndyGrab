@@ -407,18 +407,18 @@ def run(playwright: Playwright, extension_dir: Path, artifact_dir: Path, result:
             def ai_settings_page() -> None:
                 assert page.locator("#section-products #manage-keys-btn, #section-products #analyze-risk-btn").count() == 0
                 assert_workspace(page, '.nav-btn[data-target="section-ai"]', "section-ai")
-                page.locator("#gemini-keys-input").fill("AIzaFixtureGeminiKey01\n\nAIzaFixtureGeminiKey01")
-                page.locator("#deepseek-keys-input").fill("sk-fixture-deepseek-01")
-                page.locator("#claude-keys-input").fill("sk-ant-fixture-claude-01")
+                page.locator("#gemini-key-input").fill("  AIzaFixtureGeminiKey01 ")
+                page.locator("#deepseek-key-input").fill("sk-fixture-deepseek-01")
+                page.locator("#claude-key-input").fill("sk-ant-fixture-claude-01")
+                assert page.locator("#gemini-key-input").get_attribute("type") == "password"
                 page.locator("#manage-keys-btn").click()
                 wait_js(page, 
-                    "async () => { const d = await chrome.storage.local.get(['geminiApiKeys', 'deepseekApiKeys', 'claudeApiKeys']);"
-                    " return d.geminiApiKeys?.length === 1 && d.deepseekApiKeys?.length === 1 && d.claudeApiKeys?.length === 1; }"
+                    "async () => { const d = await chrome.storage.local.get(['geminiApiKey', 'deepseekApiKey', 'claudeApiKey']);"
+                    " return d.geminiApiKey === 'AIzaFixtureGeminiKey01' && d.deepseekApiKey === 'sk-fixture-deepseek-01' && d.claudeApiKey === 'sk-ant-fixture-claude-01'; }"
                 )
-                assert "Gemini 1" in page.locator("#key-count-label").inner_text()
+                assert "Gemini, DeepSeek, Claude" in page.locator("#key-count-label").inner_text()
                 assert "gemini-3.8-flash" in page.locator("#ai-model-gemini").inner_text()
                 assert "deepseek-flash" in page.locator("#ai-model-deepseek").inner_text()
-                assert "Claude 1" in page.locator("#key-count-label").inner_text()
                 assert "claude-haiku-5-5" in page.locator("#ai-model-claude").inner_text()
                 page.locator("#ai-model-input-claude").fill("claude-sonnet-5-5")
                 page.locator("#ai-model-input-claude").dispatch_event("change")

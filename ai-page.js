@@ -23,18 +23,19 @@ document.addEventListener('DOMContentLoaded', () => {
         ['claude.ok', 'Claude başarılı istek'],
         ['claude.fail', 'Claude başarısız deneme']
     ];
-    const KEY_STORE = { gemini: 'geminiApiKeys', deepseek: 'deepseekApiKeys', claude: 'claudeApiKeys' };
+    const KEY_STORE = IndyAI.KEY_STORAGE;
+    const KEY_NAMES = [...Object.values(KEY_STORE), ...Object.values(IndyAI.LEGACY_KEY_STORAGE)];
 
-    // keys: { provider: [key, ...] } for every provider in KEY_STORE.
+    // keys: { provider: key or '' } for every provider in KEY_STORE.
     function renderKeyCount(keys) {
         const label = $('key-count-label');
-        label.textContent = Object.keys(KEY_STORE).map(p => `${IndyAI.PROVIDERS[p].label} ${(keys[p] || []).length}`).join(' · ');
-        label.classList.toggle('empty', Object.keys(KEY_STORE).every(p => !(keys[p] || []).length));
+        const ready = Object.keys(KEY_STORE).filter(p => keys[p]);
+        label.textContent = ready.length
+            ? `Anahtarlı: ${ready.map(p => IndyAI.PROVIDERS[p].label).join(', ')}`
+            : 'API anahtarı yok';
+        label.classList.toggle('empty', !ready.length);
     }
-
-    function keysFromStorage(data) {
-        return Object.fromEntries(Object.entries(KEY_STORE).map(([p, store]) => [p, IndyAI.normalizeKeyList(data[store] || [])]));
-    }
+    const keysFromStorage = IndyAI.keysFromStorage;
 
     let lastModelsSeen = {};
     // Selected model plus the model the provider reported in its last successful answer.
@@ -72,9 +73,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
     }
 
-    chrome.storage.local.get([...Object.values(KEY_STORE), 'aiSettings', 'aiStats', 'aiLastModels', 'aiModelLists'], data => {
+    chrome.storage.local.get([...KEY_NAMES, 'aiSettings', 'aiStats', 'aiLastModels', 'aiModelLists'], data => {
         const keys = keysFromStorage(data);
-        for (const p of Object.keys(KEY_STORE)) $(`${p}-keys-input`).value = keys[p].join('\n');
+        for (const p of Object.keys(KEY_STORE)) $(`${p}-key-input`).value = keys[p];
         renderKeyCount(keys);
         const settings = IndyAI.mergeSettings(data.aiSettings);
         for (const p of Object.keys(KEY_STORE)) {
@@ -88,15 +89,16 @@ document.addEventListener('DOMContentLoaded', () => {
         renderStats(data.aiStats);
     });
 
-    $('manage-keys-btn').addEventListener('click', () => {
-        const keys = Object.fromEntries(Object.keys(KEY_STORE).map(p => [p, IndyAI.normalizeKeyList($(`${p}-keys-input`).value)]));
-        const update = Object.fromEntries(Object.entries(KEY_STORE).map(([p, store]) => [store, keys[p]]));
-        chrome.storage.local.set(update, () => {
-            for (const p of Object.keys(KEY_STORE)) $(`${p}-keys-input`).value = keys[p].join('\n');
-            renderKeyCount(keys);
-            $('ai-keys-status').textContent = Object.keys(KEY_STORE)
-                .map(p => `${keys[p].length} ${IndyAI.PROVIDERS[p].label}`).join(', ') + ' anahtarı kaydedildi.';
-        });
+    $('manage-keys-btn').addEventListener('click', async () => {
+        const keys = Object.fromEntries(Object.keys(KEY_STORE).map(p => [p, IndyAI.normalizeKey($(`${p}-key-input`).value)]));
+        const invalid = Object.keys(KEY_STORE).filter(p => $(`${p}-key-input`).value.trim() && !keys[p]);
+        await chrome.storage.local.set(Object.fromEntries(Object.entries(KEY_STORE).map(([p, store]) => [store, keys[p]])));
+        await chrome.storage.local.remove(Object.values(IndyAI.LEGACY_KEY_STORAGE));
+        for (const p of Object.keys(KEY_STORE)) $(`${p}-key-input`).value = keys[p];
+        renderKeyCount(keys);
+        $('ai-keys-status').textContent = invalid.length
+            ? `Geçersiz anahtar kaydedilmedi: ${invalid.map(p => IndyAI.PROVIDERS[p].label).join(', ')}`
+            : 'Anahtarlar kaydedildi.';
     });
 
     // Suggestions: the provider's live list when fetched, otherwise the built-in defaults.
@@ -111,15 +113,15 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.disabled = true;
         status.textContent = 'Model listeleri alınıyor…';
         try {
-            const data = await chrome.storage.local.get([...Object.values(KEY_STORE), 'aiModelLists']);
+            const data = await chrome.storage.local.get([...KEY_NAMES, 'aiModelLists']);
             const keys = keysFromStorage(data);
             const lists = { ...(data.aiModelLists || {}) };
             const notes = [];
             for (const p of Object.keys(KEY_STORE)) {
                 const label = IndyAI.PROVIDERS[p].label;
-                if (!keys[p].length) { notes.push(`${label}: anahtar yok`); continue; }
+                if (!keys[p]) { notes.push(`${label}: anahtar yok`); continue; }
                 try {
-                    lists[p] = await IndyAI.listModels({ provider: p, key: keys[p][0], fetchImpl: (url, init) => fetch(url, init) });
+                    lists[p] = await IndyAI.listModels({ provider: p, key: keys[p], fetchImpl: (url, init) => fetch(url, init) });
                     fillModelList(p, lists[p]);
                     notes.push(`${label}: ${lists[p].length} model`);
                 } catch (e) {
@@ -155,8 +157,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (area !== 'local') return;
         if (changes.aiStats) renderStats(changes.aiStats.newValue || {});
         if (changes.aiLastModels) renderModels(changes.aiLastModels.newValue || {});
-        if (Object.values(KEY_STORE).some(store => changes[store])) {
-            chrome.storage.local.get(Object.values(KEY_STORE), d => renderKeyCount(keysFromStorage(d)));
+        if (KEY_NAMES.some(name => changes[name])) {
+            chrome.storage.local.get(KEY_NAMES, d => renderKeyCount(keysFromStorage(d)));
         }
     });
 });

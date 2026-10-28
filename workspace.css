@@ -175,6 +175,9 @@ body #section-ai .ai-stat span { font-size:11px; color:var(--muted); }
 .ai-card-status { padding:6px 15px; border-top:1px solid var(--border); font-size:11px; line-height:1.4; color:var(--muted); }
 .ai-card-status.good { color:#22c983; }
 .ai-card-status.bad { color:var(--danger); }
+.ai-alert { display:flex; align-items:center; gap:12px; margin:0 0 16px; padding:10px 14px; background:var(--danger-soft); border:1px solid var(--border); border-radius:8px; color:var(--danger); font-size:13px; line-height:1.5; }
+.ai-alert[hidden] { display:none; }
+.ai-alert span { flex:1; min-width:0; }
 @media(max-width:760px) { body #section-ai .ai-grid, body #section-ai .ai-grid-3 { grid-template-columns:1fr; } }
 
 /* Mağazalar: add sources, configure and run the scan, then manage the list. */

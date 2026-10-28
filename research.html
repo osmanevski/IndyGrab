@@ -132,6 +132,8 @@
                 </div>
             </div>
 
+            <div id="ai-alert" class="ai-alert" role="alert" hidden><span id="ai-alert-text"></span><button id="ai-alert-dismiss" class="secondary-btn" type="button">Kapat</button></div>
+
             <div id="products-pagination" class="pagination-controls hidden"></div>
 
             <main id="product-list"></main>
@@ -603,6 +605,7 @@
             <div class="ai-grid">
                 <div class="ai-field"><label for="ai-risk-threshold">Amazon'dan çekilmeyecek risk puanı</label><select id="ai-risk-threshold"><option value="0">Kapalı — hiçbir ürünü engelleme</option><option value="9">9 ve üstü</option><option value="7">7 ve üstü</option><option value="5">5 ve üstü</option></select><small>Puan, çekimden hemen önce kural ya da tek bir AI isteğiyle belirlenir.</small></div>
                 <div class="ai-field ai-check"><input type="checkbox" id="ai-match-verification"><label for="ai-match-verification">eBay'den çekimde yalnız AI'ın aynı ürün dediği ASIN'leri kaydet</label></div>
+                <div class="ai-field ai-check"><input type="checkbox" id="ai-stop-on-failure"><label for="ai-stop-on-failure">Risk analizi alınamazsa (kredi/kota bitti, AI yanıt vermedi) çekimi durdur</label></div>
             </div>
 
             <h3>Toplu risk değerlendirmesi</h3>

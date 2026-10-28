@@ -398,9 +398,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             const card = target.closest('.product-card');
             const url = target.dataset.url + '&indygrab_auto_collect=true';
             const itemId = card.dataset.itemId;
-            chrome.runtime.sendMessage({ action: "openTabInBackground", url: url, itemId: itemId });
             target.textContent = 'Çekiliyor...';
             target.disabled = true;
+            chrome.runtime.sendMessage({ action: "openTabInBackground", url: url, itemId: itemId }, response => {
+                // The reason is shown in the AI alert banner; the product can be retried.
+                if (response && response.status === 'aiHalted') {
+                    target.textContent = "Amazon'dan Çek";
+                    target.disabled = false;
+                }
+            });
         }
         if (target.closest('.lens-btn')) {
             const card = target.closest('.product-card');

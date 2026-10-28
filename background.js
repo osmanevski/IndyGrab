@@ -139,6 +139,16 @@ async function pumpFetchAllQueue() {
         try {
             await chrome.storage.local.set({ fetchAllQueue });
             const prep = await prepareAmazonFetch(queueItem.itemId, queueItem.url);
+            if (prep.halt) {
+                // The product stays unfetched, so the next "Tümünü Çek" run retries it.
+                // Tabs already open finish on their own; onRemoved no longer pumps.
+                queueItem.status = 'waiting';
+                fetchAllState = 'stopped';
+                await chrome.storage.local.set({ fetchAllState, fetchAllQueue });
+                chrome.alarms.clear(FETCH_ALL_WATCHDOG_ALARM);
+                chrome.runtime.sendMessage({ action: 'fetchAllQueueFinished', halted: true, reason: prep.reason }).catch(() => {});
+                return;
+            }
             if (prep.skip) {
                 queueItem.status = 'completed';
                 await chrome.storage.local.set({ fetchAllQueue });
@@ -673,6 +683,14 @@ async function rememberAiModel(provider, model, task) {
     await chrome.storage.local.set({ aiLastModels });
 }
 
+// Consecutive AI tasks that failed on every provider. A few in a row usually means spent
+// credit or quota, so the panel gets a warning (aiAlert) instead of silent fallbacks.
+const AI_ALERT_STREAK = 3;
+let aiFailStreak = 0;
+async function raiseAiAlert(reason, halted) {
+    await chrome.storage.local.set({ aiAlert: { reason, halted: !!halted, at: Date.now() } });
+}
+
 async function runAi(task, prompt, images, maxTokens) {
     const { keys, settings } = await loadAiContext();
     const result = await IndyAI.runAiTask({
@@ -683,8 +701,10 @@ async function runAi(task, prompt, images, maxTokens) {
     if (result.ok) {
         countAi(`task.${task}`);
         rememberAiModel(result.provider, result.model, task);
+        aiFailStreak = 0;
     }
     else countAi(result.noKeys ? `task.${task}.noKeys` : `task.${task}.error`);
+    if (!result.ok && !result.noKeys && ++aiFailStreak >= AI_ALERT_STREAK) await raiseAiAlert(result.reason, false);
     return result;
 }
 
@@ -750,7 +770,8 @@ function withAutoCollectFlag(url) {
 }
 
 // Ö2: decide risk right before Amazon opens, and skip high-risk products.
-// Without a working AI the product is fetched with its original query, as before.
+// When the AI gives no answer fetching halts (stopOnAiFailure); with that setting off,
+// no key or risk blocking off, the product is fetched with its original query.
 async function prepareAmazonFetch(itemId, fallbackUrl) {
     const { potentialProducts = [] } = await chrome.storage.local.get('potentialProducts');
     const product = potentialProducts.find(p => p.itemId === itemId);
@@ -767,6 +788,11 @@ async function prepareAmazonFetch(itemId, fallbackUrl) {
                 riskSource: triage.source, amazonQuery: triage.amazonQuery ?? null
             });
         }
+    }
+    if (IndyAI.triageHalts(triage, settings)) {
+        countAi('fetch.haltedNoAi');
+        await raiseAiAlert(triage.reason, true);
+        return { halt: true, reason: triage.reason };
     }
     if (!triage.error && settings.riskBlockThreshold > 0 && triage.riskScore >= settings.riskBlockThreshold) {
         await saveProductFields(itemId, { fetched: true, fetchSkipReason: `Risk ${triage.riskScore}/10 — ${triage.reason}` });
@@ -1009,6 +1035,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             let url = message.url;
             if (message.itemId && String(url).includes('indygrab_auto_collect=true')) {
                 const prep = await prepareAmazonFetch(message.itemId, url);
+                if (prep.halt) {
+                    sendResponse({ status: "aiHalted", reason: prep.reason });
+                    return;
+                }
                 if (prep.skip) {
                     sendResponse({ status: "skipped" });
                     return;

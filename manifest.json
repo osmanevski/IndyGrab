@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "IndyGrab.VO",
+  "name": "IndyGrab",
   "version": "1881",
   "description": "Yerel çalışan, AI destekli Amazon ve eBay ürün araştırma aracı.",
   "permissions": [

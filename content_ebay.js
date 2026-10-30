@@ -495,7 +495,7 @@ function createSalesAnalysisSection(itemId) {
     header.appendChild(title);
     const poweredByLink = document.createElement('span');
     poweredByLink.className = 'powered-by';
-    poweredByLink.textContent = 'Powered by IndyGrab.VO';
+    poweredByLink.textContent = 'Powered by IndyGrab';
     header.appendChild(poweredByLink);
     analysisContainer.appendChild(header);
     const buttonContainer = document.createElement('div');

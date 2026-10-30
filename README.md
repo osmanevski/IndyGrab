@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/wordmark-indygrabvo.png" alt="IndyGrab.VO" width="420">
+  <img src="assets/wordmark-indygrab.png" alt="IndyGrab" width="420">
 </p>
 
-# IndyGrab.VO
+# IndyGrab
 
 Amazon ve eBay üzerinde dropshipping / online arbitraj için ürün araştırmasını otomatikleştiren, sunucusuz çalışan bir Chrome eklentisi (Manifest V3). eBay mağazalarını tarayıp satan ürünleri bulur, bunları Amazon'da arayıp ASIN havuzuna toplar; risk ve eşleşme kontrolünde isteğe bağlı olarak AI kullanır.
 
@@ -37,7 +37,7 @@ Amazon ve eBay üzerinde dropshipping / online arbitraj için ürün araştırma
 
 1. Depoyu indirin ya da klonlayın:
    ```bash
-   git clone https://github.com/osmanevski/IndyGrab.VO.git
+   git clone https://github.com/osmanevski/IndyGrab.git
    ```
 2. Chrome'da `chrome://extensions` sayfasını açın ve sağ üstten **Geliştirici modu**'nu etkinleştirin.
 3. **Paketlenmemiş öğe yükle** ile klasörü seçin.
@@ -51,7 +51,7 @@ Güncellemek için klasörde `git pull` çalıştırıp `chrome://extensions` sa
 - Eklenti yalnızca eBay, Amazon ve Easync sayfalarıyla çalışır.
 - AI kullanılırsa ürün başlıkları ve görselleri seçtiğiniz sağlayıcıya (Google Gemini, DeepSeek, Anthropic Claude ya da OpenRouter ve onun yönlendirdiği model sağlayıcısı) gönderilir. "Yerel" ifadesi bu veriyi kapsamaz.
 - `cookies` izni, ürün fiyat ve stok bilgisini oturumunuzla Amazon'dan okumak için kullanılır; çerezler Amazon dışında bir yere gönderilmez.
-- `bookmarks` izni, kaydettiğiniz bağlantıları "IndyGrab.VO" adlı yer imi klasörüne eklemek içindir.
+- `bookmarks` izni, kaydettiğiniz bağlantıları "IndyGrab" adlı yer imi klasörüne eklemek içindir.
 
 ## Geliştirme
 

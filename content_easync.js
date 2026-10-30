@@ -8,7 +8,7 @@
             // Bu div, içinde kalın (strong) etiketli bir isim barındıran ilk div'dir.
             const infoContainer = addressBlock.querySelector('div:has(> strong)');
             if (!infoContainer) {
-                console.error("IndyGrab.VO Error: Adres bilgi konteyneri bulunamadı.");
+                console.error("IndyGrab Error: Adres bilgi konteyneri bulunamadı.");
                 return null;
             }
 
@@ -17,7 +17,7 @@
                                .filter(line => line && line.toLowerCase() !== 'us');
 
             if (lines.length < 3) {
-                console.error("IndyGrab.VO Error: Adres satırları yetersiz.", lines);
+                console.error("IndyGrab Error: Adres satırları yetersiz.", lines);
                 return null;
             }
 
@@ -30,7 +30,7 @@
             const cityStateZipLine = lines.find(line => line.match(cityStateZipRegex));
             
             if (!cityStateZipLine) {
-                 console.error("IndyGrab.VO Error: Şehir/Eyalet/Posta Kodu satırı bulunamadı veya format hatalı.");
+                 console.error("IndyGrab Error: Şehir/Eyalet/Posta Kodu satırı bulunamadı veya format hatalı.");
                  return null;
             }
 
@@ -49,7 +49,7 @@
             
             return addressData;
         } catch (error) {
-            console.error("IndyGrab.VO Adres Ayrıştırma Hatası:", error);
+            console.error("IndyGrab Adres Ayrıştırma Hatası:", error);
             return null;
         }
     }

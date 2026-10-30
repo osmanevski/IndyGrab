@@ -659,6 +659,15 @@ async function getOrCreateFolder(folderName, parentId = '1') {
     }
 }
 
+// Bookmarks saved before the rename stay together under the new folder name.
+async function renameOldBookmarkFolder(parentId = '1') {
+    const isFolderHere = b => b.parentId === parentId && !b.url;
+    const oldFolder = (await chrome.bookmarks.search({ title: 'IndyGrab.VO' })).find(isFolderHere);
+    if (!oldFolder) return;
+    const newExists = (await chrome.bookmarks.search({ title: 'IndyGrab' })).some(isFolderHere);
+    if (!newExists) await chrome.bookmarks.update(oldFolder.id, { title: 'IndyGrab' });
+}
+
 // ---- AI tasks (ai-core.js does provider calls, rules, hashing and prompts) ----------------
 async function loadAiContext() {
     const d = await chrome.storage.local.get([...Object.values(IndyAI.KEY_STORAGE), ...Object.values(IndyAI.LEGACY_KEY_STORAGE), 'aiSettings']);
@@ -1090,7 +1099,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "createBookmark") {
         (async () => {
             try {
-                const folderId = await getOrCreateFolder("IndyGrab.VO");
+                await renameOldBookmarkFolder();
+                const folderId = await getOrCreateFolder("IndyGrab");
                 await chrome.bookmarks.create({ parentId: folderId, title: message.title, url: message.url });
                 sendResponse({ status: "success" });
             } catch (error) {

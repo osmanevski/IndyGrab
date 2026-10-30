@@ -16,7 +16,7 @@ tags: [indygrab, test]
 - `mixer.html` and `blacklist.html` are now compatibility stubs. `tool-route.js` sends them to `research.html#<data-workspace>`.
 - Each tool has its own notification element (`#notification`, `#blacklist-notification`, `#mixer-notification`). The blacklist uses `data-blacklist-i18n`, so `popup.js`'s `[data-i18n]` pass can't overwrite it.
 - Changing the language with the flags also updates the blacklist through `storage.onChanged`. Adding memory items with "Send to Blacklist" re-renders the embedded blacklist.
-- Logo is still `assets/wordmark-indygrabvo.png`.
+- Logo is still `assets/wordmark-indygrab.png`.
 
 ## Review fixes
 - The embedded blacklist heading changed from `h1` to `h2` (so it no longer duplicates the page `h1`). Its title now says "ASIN kara listesi" so it isn't confused with the seller "Kara Liste".

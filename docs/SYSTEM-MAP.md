@@ -19,7 +19,7 @@ Geçici worktree kalıcı arşiv değildir; sonraki uygulama commit'leri bu dald
 # Sistemin ağacı
 
 ```text
-IndyGrab.VO — Chrome MV3
+IndyGrab — Chrome MV3
 ├── popup.html + launcher.js: hızlı erişim, sayaçlar, aktif Amazon sekmesinde toplama
 ├── research.html: ana kontrol paneli
 │   ├── research.js

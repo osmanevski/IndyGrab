@@ -344,7 +344,7 @@
         ::-webkit-scrollbar-thumb { background: var(--t-444); border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--t-555); }
 
-        /* IndyGrab.VO dashboard refresh */
+        /* IndyGrab dashboard refresh */
         :root {
             color-scheme: dark;
             --bg: #0a0b0d;

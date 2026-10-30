@@ -846,7 +846,7 @@
         asinBox.appendChild(brandText);
 
         const powered = document.createElement('span');
-        powered.textContent = 'Powered by IndyGrab.VO';
+        powered.textContent = 'Powered by IndyGrab';
         Object.assign(powered.style, {
             fontSize: '10px',
             color: '#888',

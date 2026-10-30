@@ -1,13 +1,13 @@
 @echo off
 setlocal EnableExtensions
-title IndyGrab.VO Guncelleyici
+title IndyGrab Guncelleyici
 
 rem Betigi her zaman kendi bulundugu proje klasorunden calistir.
 cd /d "%~dp0"
 
 echo.
 echo ==========================================
-echo        IndyGrab.VO Guncelleyici
+echo        IndyGrab Guncelleyici
 echo ==========================================
 echo.
 
@@ -23,7 +23,7 @@ if errorlevel 1 (
 
 git rev-parse --is-inside-work-tree >nul 2>&1
 if errorlevel 1 (
-    echo HATA: Bu dosya IndyGrab.VO proje klasorunde calistirilmali.
+    echo HATA: Bu dosya IndyGrab proje klasorunde calistirilmali.
     echo.
     pause
     exit /b 1
@@ -64,7 +64,7 @@ if errorlevel 1 (
 echo.
 echo Guncelleme basariyla tamamlandi.
 echo Yeni kodun etkinlesmesi icin Chrome'u kapatip acin
-echo veya chrome://extensions sayfasindan IndyGrab.VO icin Yenile'ye basin.
+echo veya chrome://extensions sayfasindan IndyGrab icin Yenile'ye basin.
 echo.
 pause
 exit /b 0

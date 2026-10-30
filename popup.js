@@ -4,7 +4,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     const translations = {
         en: {
             add_words: "Add words…", search_words: "Search words…", add_word: "Add", copy_words: "Copy words", select_value: "Select…",
-            title: "IndyGrab.VO", tab_collect: "Collect", tab_filter: "Filter", tab_memory: "Memory", blacklist: "Blacklist",
+            title: "IndyGrab", tab_collect: "Collect", tab_filter: "Filter", tab_memory: "Memory", blacklist: "Blacklist",
             save_to_memory: "Save to Memory", feedback_stars: "Feedback Stars", stars_1: "1 Star and above",
             stars_2: "2 Stars and above", stars_3: "3 Stars and above", stars_4: "4 Stars and above",
             stars_4_1: "4.1 Stars and above", stars_4_2: "4.2 Stars and above", stars_4_3: "4.3 Stars and above",
@@ -46,7 +46,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         },
         tr: {
             add_words: "Kelime ekle…", search_words: "Kelime ara…", add_word: "Ekle", copy_words: "Kelimeleri kopyala", select_value: "Seç…",
-            title: "IndyGrab.VO", tab_collect: "Topla", tab_filter: "Filtre", tab_memory: "Havuz", blacklist: "Kara Liste",
+            title: "IndyGrab", tab_collect: "Topla", tab_filter: "Filtre", tab_memory: "Havuz", blacklist: "Kara Liste",
             save_to_memory: "Hafızaya Kaydet", feedback_stars: "Ürün puanı", stars_1: "1 Yıldız ve üstü",
             stars_2: "2 Yıldız ve üstü", stars_3: "3 Yıldız ve üstü", stars_4: "4 Yıldız ve üstü", stars_4_1: "4.1 Yıldız ve üstü",
             stars_4_2: "4.2 Yıldız ve üstü", stars_4_3: "4.3 Yıldız ve üstü", stars_4_4: "4.4 Yıldız ve üstü",

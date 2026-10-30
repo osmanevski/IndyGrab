@@ -6,7 +6,7 @@
     if (!window.location.href.includes('/address') && !window.location.href.includes('/checkout/')) {
         return;
     }
-    console.log("IndyGrab.VO: Amazon paste script bu sayfada aktif.");
+    console.log("IndyGrab: Amazon paste script bu sayfada aktif.");
 
     let buttonInjected = false; // Butonun tekrar tekrar eklenmesini önlemek için bayrak
 
@@ -23,7 +23,7 @@
         chrome.storage.local.get('easyncAddress', (result) => {
             if (result.easyncAddress) {
                 const addr = result.easyncAddress;
-                console.log("IndyGrab.VO: Adres yapıştırılıyor:", addr);
+                console.log("IndyGrab: Adres yapıştırılıyor:", addr);
 
                 setFieldValue('#address-ui-widgets-enterAddressFullName', addr.fullName);
                 setFieldValue('#address-ui-widgets-enterAddressPhoneNumber', addr.phone);
@@ -49,7 +49,7 @@
         if (!anchorElement) return;
 
         const pasteButton = document.createElement('button');
-        pasteButton.textContent = '⚡ IndyGrab.VO: Adresi Yapıştır';
+        pasteButton.textContent = '⚡ IndyGrab: Adresi Yapıştır';
         pasteButton.className = 'indygrab-action-button';
 
         pasteButton.addEventListener('click', (event) => {
@@ -60,7 +60,7 @@
         });
 
         anchorElement.insertAdjacentElement('afterend', pasteButton);
-        console.log("IndyGrab.VO: Yapıştır butonu başarıyla eklendi.");
+        console.log("IndyGrab: Yapıştır butonu başarıyla eklendi.");
     }
     
     // Formu ve butonu bulup ekleyecek ana fonksiyon

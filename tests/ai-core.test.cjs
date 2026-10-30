@@ -175,18 +175,19 @@ test('Claude refusal skips to the next provider without a retry', async () => {
 });
 
 test('selected models reach each provider and Claude request fields follow the model', async () => {
-    const s = AI.mergeSettings({ models: { gemini: ' gemini-2.5-flash ', deepseek: 'bad model id!', claude: 'claude-opus-5-5', openai: 'x' } });
-    assert.deepEqual(s.models, { gemini: 'gemini-2.5-flash', deepseek: 'deepseek-flash', claude: 'claude-opus-5-5' });
+    const s = AI.mergeSettings({ models: { gemini: ' gemini-2.5-flash ', deepseek: 'bad model id!', claude: 'claude-opus-5-5', openrouter: 'google/gemini-4-argon', openai: 'x' } });
+    assert.deepEqual(s.models, { gemini: 'gemini-2.5-flash', deepseek: 'deepseek-flash', claude: 'claude-opus-5-5', openrouter: 'google/gemini-4-argon' });
     assert.equal(AI.mergeSettings({}).models.claude, 'claude-haiku-5-5');
+    assert.equal(AI.mergeSettings({}).models.openrouter, 'openai/gpt-5.6-luna');
 
     const seen = [];
     const fetchImpl = async (url, init) => { seen.push({ url, init, body: JSON.parse(init.body) }); return jsonResponse(500, {}); };
     await AI.runAiTask({
-        task: 'triage', prompt: 'x', keys: { gemini: 'AIza-key-00000', deepseek: 'sk-deepseek-000', claude: 'sk-ant-key-0000' },
+        task: 'triage', prompt: 'x', keys: { gemini: 'AIza-key-00000', deepseek: 'sk-deepseek-000', claude: 'sk-ant-key-0000', openrouter: 'sk-or-v1-key-000' },
         settings: { models: s.models, taskProviders: { triage: 'gemini' } }, fetchImpl, sleepImpl: noSleep
     });
-    assert.equal(seen.length, 6, 'each provider: first try + one retry on 500');
-    const [gemini, deepseek, claude] = [seen[0], seen[2], seen[4]];
+    assert.equal(seen.length, 8, 'each provider: first try + one retry on 500');
+    const [gemini, deepseek, claude, openrouter] = [seen[0], seen[2], seen[4], seen[6]];
     assert.match(gemini.url, /models\/gemini-2\.5-flash:generateContent/);
     assert.equal(gemini.body.generationConfig.thinkingConfig, undefined, 'thinkingLevel is Gemini 3+ only');
     assert.equal(deepseek.body.model, 'deepseek-flash');
@@ -195,6 +196,7 @@ test('selected models reach each provider and Claude request fields follow the m
     assert.deepEqual(claude.body.output_config, { effort: 'low' });
     assert.equal(claude.body.fallbacks, 'default');
     assert.equal(claude.init.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+    assert.equal(openrouter.body.model, 'google/gemini-4-argon');
 });
 
 test('live model lists keep text models only', async () => {
@@ -217,11 +219,69 @@ test('live model lists keep text models only', async () => {
     await assert.rejects(AI.listModels({ provider: 'deepseek', key: 'sk-x-00000000', fetchImpl: async () => jsonResponse(401, {}) }), /DeepSeek HTTP 401/);
 });
 
+const openRouterOk = text => jsonResponse(200, { model: 'openai/gpt-5.6-luna', choices: [{ message: { content: text } }] });
+
+test('OpenRouter request is an OpenAI-style chat call with images, JSON mode and low reasoning', async () => {
+    let url, init;
+    const r = await AI.runAiTask({
+        task: 'triage', prompt: 'risk?', images: [{ mimeType: 'image/jpeg', data: 'AAAA' }], maxTokens: 200,
+        keys: { openrouter: 'sk-or-v1-test-0000' }, settings: { taskProviders: { triage: 'openrouter' } },
+        fetchImpl: async (u, i) => { url = u; init = i; return openRouterOk('{"riskScore": 2, "reason": "generic"}'); }
+    });
+    assert.equal(r.provider, 'openrouter');
+    assert.equal(r.model, 'openai/gpt-5.6-luna');
+    assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+    assert.equal(init.headers.Authorization, 'Bearer sk-or-v1-test-0000');
+    const body = JSON.parse(init.body);
+    assert.equal(body.model, 'openai/gpt-5.6-luna');
+    assert.deepEqual(body.response_format, { type: 'json_object' });
+    assert.deepEqual(body.reasoning, { effort: 'low', exclude: true });
+    assert.equal(body.max_tokens, 1024);
+    assert.equal(body.messages[1].content[1].image_url.url, 'data:image/jpeg;base64,AAAA');
+});
+
+test('OpenRouter error inside HTTP 200 retries when temporary and otherwise moves to the next provider', async () => {
+    const run = async (first) => {
+        const urls = [];
+        const r = await AI.runAiTask({
+            task: 'match', prompt: 'x', keys: { openrouter: 'sk-or-v1-test-0000', gemini: 'AIza-key-00000' },
+            settings: { taskProviders: { match: 'openrouter' } }, sleepImpl: async () => {},
+            fetchImpl: async url => {
+                urls.push(url);
+                if (url.includes('openrouter') && urls.length === 1) return jsonResponse(200, first);
+                return url.includes('openrouter') ? openRouterOk('{"matches": []}') : geminiOk('{"matches": []}');
+            }
+        });
+        return { provider: r.provider, calls: urls.length };
+    };
+    assert.deepEqual(await run({ error: { code: 503, message: 'upstream down' } }), { provider: 'openrouter', calls: 2 });
+    assert.deepEqual(await run({ choices: [{ error: { code: 400, message: 'bad image' } }] }), { provider: 'gemini', calls: 2 });
+});
+
+test('OpenRouter model list keeps only models that read images and answer in text', async () => {
+    const model = (id, input, output) => ({ id, architecture: { input_modalities: input, output_modalities: output } });
+    let listUrl;
+    const ids = await AI.listModels({
+        provider: 'openrouter', key: 'sk-or-v1-test-0000',
+        fetchImpl: async url => {
+            listUrl = url;
+            return jsonResponse(200, { data: [
+                model('anthropic/claude-haiku-5.5', ['text', 'image'], ['text']),
+                model('anthropic/claude-haiku-5.5:batch', ['text', 'image'], ['text']),
+                model('text/only', ['text'], ['text']),
+                model('audio/out', ['text', 'image'], ['audio'])
+            ] });
+        }
+    });
+    assert.equal(listUrl, 'https://openrouter.ai/api/v1/models');
+    assert.deepEqual(ids, ['anthropic/claude-haiku-5.5']);
+});
+
 test('legacy key lists migrate to one key per provider', () => {
     const legacy = { geminiApiKey: 'AIza-stale-single-0', geminiApiKeys: ['AIza-list-first-00', 'AIza-list-second-0'], deepseekApiKeys: [], claudeApiKey: 'sk-ant-current-00' };
-    assert.deepEqual(AI.keysFromStorage(legacy), { gemini: 'AIza-list-first-00', deepseek: '', claude: 'sk-ant-current-00' });
+    assert.deepEqual(AI.keysFromStorage(legacy), { gemini: 'AIza-list-first-00', deepseek: '', claude: 'sk-ant-current-00', openrouter: '' });
     const m = AI.migrateKeyStorage(legacy);
-    assert.deepEqual(m.set, { geminiApiKey: 'AIza-list-first-00', deepseekApiKey: '', claudeApiKey: 'sk-ant-current-00' });
+    assert.deepEqual(m.set, { geminiApiKey: 'AIza-list-first-00', deepseekApiKey: '', claudeApiKey: 'sk-ant-current-00', openrouterApiKey: '' });
     assert.deepEqual(m.remove.sort(), ['deepseekApiKeys', 'geminiApiKeys']);
     assert.equal(AI.migrateKeyStorage(m.set), null);
     assert.deepEqual(AI.providerOrder('match', {}, AI.keysFromStorage(m.set)), ['gemini', 'claude']);

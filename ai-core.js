@@ -1,4 +1,4 @@
-// Shared AI layer for the service worker: one API key per provider (Gemini, DeepSeek, Claude),
+// Shared AI layer for the service worker: one API key per provider (Gemini, DeepSeek, Claude, OpenRouter),
 // deterministic risk rules, perceptual image hash and prompt/response handling.
 // No DOM and no chrome.* access here, so the same file runs under node tests.
 (function (root) {
@@ -9,7 +9,8 @@
         gemini: { label: 'Gemini', model: 'gemini-3.8-flash', note: 'Gemini 3.8 Flash', suggestions: ['gemini-3.8-flash', 'gemini-3.1-flash-lite'] },
         // DeepSeek keeps one alias for its newest Flash release (DeepSeek-V4.1-Flash as of 2026-09-13).
         deepseek: { label: 'DeepSeek', model: 'deepseek-flash', note: "DeepSeek'in en yeni Flash modeline yönlenir", suggestions: ['deepseek-flash', 'deepseek-v4-pro'] },
-        claude: { label: 'Claude', model: 'claude-haiku-5-5', note: 'Claude Haiku 5.5', suggestions: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] }
+        claude: { label: 'Claude', model: 'claude-haiku-5-5', note: 'Claude Haiku 5.5', suggestions: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] },
+        openrouter: { label: 'OpenRouter', model: 'openai/gpt-5.6-luna', note: 'OpenRouter üzerinden GPT-5.6 Luna', suggestions: ['openai/gpt-5.6-luna', 'anthropic/claude-haiku-5.5', 'google/gemini-4-argon'] }
     };
     const MODEL_ID = /^[A-Za-z0-9][\w.:\/-]{1,79}$/;
 
@@ -59,7 +60,7 @@
 
     // One API key per provider, stored as a string. Older versions kept a list per provider
     // (<provider>ApiKeys); its first entry is taken over by migrateKeyStorage.
-    const KEY_STORAGE = { gemini: 'geminiApiKey', deepseek: 'deepseekApiKey', claude: 'claudeApiKey' };
+    const KEY_STORAGE = { gemini: 'geminiApiKey', deepseek: 'deepseekApiKey', claude: 'claudeApiKey', openrouter: 'openrouterApiKey' };
     const LEGACY_KEY_STORAGE = { gemini: 'geminiApiKeys', deepseek: 'deepseekApiKeys', claude: 'claudeApiKeys' };
 
     function normalizeKey(input) {
@@ -297,10 +298,14 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         return { text, model: data?.modelVersion || model };
     }
 
-    async function callDeepSeek({ key, model, prompt, images, maxTokens, fetchImpl }) {
-        const content = images.length
+    function chatContent(prompt, images) {
+        return images.length
             ? [{ type: 'text', text: prompt }, ...images.map(i => ({ type: 'image_url', image_url: { url: `data:${i.mimeType};base64,${i.data}` } }))]
             : prompt;
+    }
+
+    async function callDeepSeek({ key, model, prompt, images, maxTokens, fetchImpl }) {
+        const content = chatContent(prompt, images);
         const res = await fetchImpl('https://api.deepseek.com/chat/completions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -375,10 +380,42 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
         return { text, model: data?.model || model };
     }
 
-    const CALLERS = { gemini: callGemini, deepseek: callDeepSeek, claude: callClaude };
+    async function callOpenRouter({ key, model, prompt, images, maxTokens, fetchImpl }) {
+        const res = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: 'system', content: 'You answer with a single valid JSON object and nothing else.' },
+                    { role: 'user', content: chatContent(prompt, images) }
+                ],
+                // OpenRouter drops what the chosen model does not support. Reasoning tokens share
+                // the output budget, so leave room beyond the JSON answer.
+                response_format: { type: 'json_object' },
+                reasoning: { effort: 'low', exclude: true },
+                max_tokens: Math.max(1024, maxTokens * 4)
+            })
+        });
+        if (!res.ok) return httpFailure('OpenRouter', res);
+        const data = await res.json();
+        // An upstream failure can arrive as HTTP 200 with an error object.
+        const error = data?.error || data?.choices?.[0]?.error;
+        if (error) return { retry: TRANSIENT_STATUSES.has(error.code), status: error.code, reason: `OpenRouter HTTP ${error.code}` };
+        const text = data?.choices?.[0]?.message?.content;
+        if (!text) return { retry: false, reason: 'OpenRouter: boş yanıt' };
+        return { text, model: data?.model || model };
+    }
+
+    const CALLERS = { gemini: callGemini, deepseek: callDeepSeek, claude: callClaude, openrouter: callOpenRouter };
 
     // Text models the key can use, from the provider's own model list. Throws on HTTP errors.
     const NON_TEXT_MODEL = /embed|tts|audio|live|image|imagen|veo|aqa|learnlm|gemma/i;
+    // OpenRouter lists hundreds of models; the tasks send product photos and expect text back.
+    function openRouterModelFits(m) {
+        const { input_modalities: input = [], output_modalities: output = [] } = m.architecture || {};
+        return input.includes('image') && output.includes('text') && !String(m.id).endsWith(':batch');
+    }
     async function listModels({ provider, key, fetchImpl }) {
         let res;
         if (provider === 'gemini') {
@@ -387,6 +424,8 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
             res = await fetchImpl('https://api.deepseek.com/models', { headers: { Authorization: `Bearer ${key}` } });
         } else if (provider === 'claude') {
             res = await fetchImpl('https://api.anthropic.com/v1/models?limit=1000', { headers: { 'x-api-key': key, ...CLAUDE_HEADERS } });
+        } else if (provider === 'openrouter') {
+            res = await fetchImpl('https://openrouter.ai/api/v1/models', { headers: { Authorization: `Bearer ${key}` } });
         } else {
             throw new Error(`Bilinmeyen sağlayıcı: ${provider}`);
         }
@@ -397,7 +436,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
                 .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
                 .map(m => String(m.name || '').replace(/^models\//, ''))
                 .filter(id => id.startsWith('gemini') && !NON_TEXT_MODEL.test(id))
-            : (data?.data || []).map(m => String(m.id || ''));
+            : (data?.data || []).filter(m => provider !== 'openrouter' || openRouterModelFits(m)).map(m => String(m.id || ''));
         return [...new Set(ids.filter(id => MODEL_ID.test(id)))];
     }
 

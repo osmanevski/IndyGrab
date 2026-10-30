@@ -22,7 +22,9 @@ document.addEventListener('DOMContentLoaded', () => {
         ['gemini.ok', 'Gemini başarılı istek'],
         ['gemini.fail', 'Gemini başarısız deneme'],
         ['claude.ok', 'Claude başarılı istek'],
-        ['claude.fail', 'Claude başarısız deneme']
+        ['claude.fail', 'Claude başarısız deneme'],
+        ['openrouter.ok', 'OpenRouter başarılı istek'],
+        ['openrouter.fail', 'OpenRouter başarısız deneme']
     ];
     const KEY_STORE = IndyAI.KEY_STORAGE;
     const KEY_NAMES = [...Object.values(KEY_STORE), ...Object.values(IndyAI.LEGACY_KEY_STORAGE)];

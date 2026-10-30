@@ -12,7 +12,9 @@ document.addEventListener('DOMContentLoaded', () => {
         ['fetch.haltedNoAi', 'AI yanıt vermedi, çekim durduruldu'],
         ['match.verified', 'Eşleşme doğrulandı'],
         ['match.noMatch', 'Aynı ürün yok, kaydedilmedi'],
-        ['match.unverified', 'Doğrulanamadı, filtre sonucu kaydedildi'],
+        ['match.blocked', 'AI karar veremedi, kaydedilmedi'],
+        ['match.unverified', 'AI olmadan, onayınla kaydedildi'],
+        ['fetch.noAiApproved', 'AI olmadan, onayınla çekildi'],
         ['hash.same', 'Hash: aynı fotoğraf'],
         ['hash.different', 'Hash: farklı fotoğraf'],
         ['hash.unsure', "Hash kararsız, AI'a soruldu"],
@@ -89,7 +91,6 @@ document.addEventListener('DOMContentLoaded', () => {
         TASKS.forEach(task => { $(`ai-provider-${task}`).value = settings.taskProviders[task]; });
         $('ai-risk-threshold').value = String(settings.riskBlockThreshold);
         $('ai-match-verification').checked = settings.matchVerification;
-        $('ai-stop-on-failure').checked = settings.stopOnAiFailure;
         renderStats(data.aiStats);
     });
 
@@ -145,7 +146,6 @@ document.addEventListener('DOMContentLoaded', () => {
             TASKS.forEach(task => { settings.taskProviders[task] = $(`ai-provider-${task}`).value; });
             settings.riskBlockThreshold = Number($('ai-risk-threshold').value);
             settings.matchVerification = $('ai-match-verification').checked;
-            settings.stopOnAiFailure = $('ai-stop-on-failure').checked;
             for (const p of Object.keys(KEY_STORE)) settings.models[p] = $(`ai-model-input-${p}`).value.trim();
             const merged = IndyAI.mergeSettings(settings);
             for (const p of Object.keys(KEY_STORE)) $(`ai-model-input-${p}`).value = merged.models[p];
@@ -153,28 +153,40 @@ document.addEventListener('DOMContentLoaded', () => {
             chrome.storage.local.set({ aiSettings: merged });
         });
     }
-    [...TASKS.map(task => `ai-provider-${task}`), ...Object.keys(KEY_STORE).map(p => `ai-model-input-${p}`), 'ai-risk-threshold', 'ai-match-verification', 'ai-stop-on-failure']
+    [...TASKS.map(task => `ai-provider-${task}`), ...Object.keys(KEY_STORE).map(p => `ai-model-input-${p}`), 'ai-risk-threshold', 'ai-match-verification']
         .forEach(id => $(id).addEventListener('change', saveSettings));
 
     // Raised by background after a halted fetch or several AI failures in a row.
-    function renderAiAlert(alert) {
+    function renderAiAlert({ aiAlert: alert, aiBypass: bypass }) {
         const box = $('ai-alert');
         if (!box) return;
-        box.hidden = !alert;
-        if (!alert) return;
-        const when = new Date(alert.at).toLocaleString('tr-TR');
-        $('ai-alert-text').textContent = alert.halted
-            ? `Risk analizi alınamadığı için Amazon çekimi durduruldu (${when}): ${alert.reason}. API kredinizi/kotanızı kontrol edip yeniden başlatın.`
-            : `AI üst üste yanıt vermedi (${when}): ${alert.reason}. API krediniz veya kotanız bitmiş olabilir.`;
+        box.hidden = !alert && !bypass;
+        $('ai-alert-continue').hidden = !alert?.halted;
+        if (alert) {
+            const when = new Date(alert.at).toLocaleString('tr-TR');
+            $('ai-alert-text').textContent = alert.halted
+                ? `AI yanıt vermediği için iş durduruldu (${when}): ${alert.reason}. API kredinizi/kotanızı kontrol edin ya da AI olmadan devam etmeyi onaylayın.`
+                : `AI üst üste yanıt vermedi (${when}): ${alert.reason}. API krediniz veya kotanız bitmiş olabilir.`;
+        } else if (bypass) {
+            $('ai-alert-text').textContent = 'Onayınla AI olmadan devam ediliyor. AI yeniden yanıt verince bu izin kendiliğinden kalkar; Kapat izni hemen kaldırır.';
+        }
     }
-    chrome.storage.local.get('aiAlert', d => renderAiAlert(d.aiAlert));
-    $('ai-alert-dismiss')?.addEventListener('click', () => chrome.storage.local.remove('aiAlert'));
+    const refreshAiAlert = () => chrome.storage.local.get(['aiAlert', 'aiBypass'], renderAiAlert);
+    refreshAiAlert();
+    $('ai-alert-dismiss')?.addEventListener('click', () => chrome.storage.local.remove(['aiAlert', 'aiBypass']));
+    $('ai-alert-continue')?.addEventListener('click', () => {
+        chrome.storage.local.get('aiAlert', ({ aiAlert }) => {
+            chrome.runtime.sendMessage({ action: 'allowNoAi' }, () => {
+                if (aiAlert?.resumeFetchAll) chrome.runtime.sendMessage({ action: 'startFetchAllQueue' });
+            });
+        });
+    });
 
     $('ai-stats-reset').addEventListener('click', () => chrome.storage.local.set({ aiStats: {} }));
 
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local') return;
-        if (changes.aiAlert) renderAiAlert(changes.aiAlert.newValue);
+        if (changes.aiAlert || changes.aiBypass) refreshAiAlert();
         if (changes.aiStats) renderStats(changes.aiStats.newValue || {});
         if (changes.aiLastModels) renderModels(changes.aiLastModels.newValue || {});
         if (KEY_NAMES.some(name => changes[name])) {

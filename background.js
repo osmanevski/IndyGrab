@@ -22,6 +22,21 @@ let activeAutomationTabs = [];
 let automationConcurrency = 1;
 let automationWindowId = null;
 let fetchingTabs = {};
+// The worker can restart while an Amazon tab loads, so tab → product also lives in session storage.
+const fetchingTabKey = tabId => `fetchingTab_${tabId}`;
+function rememberFetchingTab(tabId, itemId) {
+    fetchingTabs[tabId] = itemId;
+    return chrome.storage.session.set({ [fetchingTabKey(tabId)]: itemId });
+}
+function forgetFetchingTab(tabId) {
+    delete fetchingTabs[tabId];
+    return chrome.storage.session.remove(fetchingTabKey(tabId));
+}
+async function fetchingItemFor(tabId) {
+    if (fetchingTabs[tabId]) return fetchingTabs[tabId];
+    const saved = await chrome.storage.session.get(fetchingTabKey(tabId));
+    return saved[fetchingTabKey(tabId)] || null;
+}
 let analysisState = 'stopped';
 let activeAnalysisTabs = [];
 let analysisWindowId = null;
@@ -143,10 +158,7 @@ async function pumpFetchAllQueue() {
                 // The product stays unfetched, so the next "Tümünü Çek" run retries it.
                 // Tabs already open finish on their own; onRemoved no longer pumps.
                 queueItem.status = 'waiting';
-                fetchAllState = 'stopped';
-                await chrome.storage.local.set({ fetchAllState, fetchAllQueue });
-                chrome.alarms.clear(FETCH_ALL_WATCHDOG_ALARM);
-                chrome.runtime.sendMessage({ action: 'fetchAllQueueFinished', halted: true, reason: prep.reason }).catch(() => {});
+                await haltFetchAll(prep.reason);
                 return;
             }
             if (prep.skip) {
@@ -155,7 +167,7 @@ async function pumpFetchAllQueue() {
                 continue;
             }
             const tab = await chrome.tabs.create({ url: prep.url, active: false });
-            fetchingTabs[tab.id] = queueItem.itemId;
+            await rememberFetchingTab(tab.id, queueItem.itemId);
             activeFetchAllTabs.push({ tabId: tab.id, itemId: queueItem.itemId, startedAt: Date.now() });
             await chrome.storage.local.set({ fetchAllQueue, activeFetchAllTabs });
             if (activeFetchAllTabs.length < FETCH_ALL_CONCURRENCY) {
@@ -389,11 +401,11 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
         }
         processQueueLoop();
     }
+    forgetFetchingTab(tabId);
     const fetchAllIndex = activeFetchAllTabs.findIndex(t => t.tabId === tabId);
     if (fetchAllIndex !== -1) {
         const closedInfo = activeFetchAllTabs[fetchAllIndex];
         activeFetchAllTabs.splice(fetchAllIndex, 1);
-        delete fetchingTabs[tabId];
         const qIndex = fetchAllQueue.findIndex(item => item.itemId === closedInfo.itemId && item.status === 'active');
         if (qIndex !== -1) fetchAllQueue[qIndex].status = 'completed';
         await chrome.storage.local.set({ activeFetchAllTabs, fetchAllQueue });
@@ -687,8 +699,24 @@ async function rememberAiModel(provider, model, task) {
 // credit or quota, so the panel gets a warning (aiAlert) instead of silent fallbacks.
 const AI_ALERT_STREAK = 3;
 let aiFailStreak = 0;
-async function raiseAiAlert(reason, halted) {
-    await chrome.storage.local.set({ aiAlert: { reason, halted: !!halted, at: Date.now() } });
+async function raiseAiAlert(reason, halted, resumeFetchAll = false) {
+    await chrome.storage.local.set({ aiAlert: { reason, halted: !!halted, resumeFetchAll, at: Date.now() } });
+}
+
+// Nothing runs without the AI unless the user said so after being asked. That approval (aiBypass)
+// ends when the AI answers again, when the user withdraws it or when the browser restarts.
+async function aiBypassActive() {
+    const { aiBypass } = await chrome.storage.local.get('aiBypass');
+    return !!aiBypass;
+}
+chrome.runtime.onStartup.addListener(() => chrome.storage.local.remove('aiBypass'));
+
+async function haltFetchAll(reason) {
+    fetchAllState = 'stopped';
+    await chrome.storage.local.set({ fetchAllState, fetchAllQueue });
+    chrome.alarms.clear(FETCH_ALL_WATCHDOG_ALARM);
+    await raiseAiAlert(reason, true, true);
+    chrome.runtime.sendMessage({ action: 'fetchAllQueueFinished', halted: true, reason }).catch(() => {});
 }
 
 async function runAi(task, prompt, images, maxTokens) {
@@ -702,6 +730,7 @@ async function runAi(task, prompt, images, maxTokens) {
         countAi(`task.${task}`);
         rememberAiModel(result.provider, result.model, task);
         aiFailStreak = 0;
+        chrome.storage.local.remove('aiBypass');
     }
     else countAi(result.noKeys ? `task.${task}.noKeys` : `task.${task}.error`);
     if (!result.ok && !result.noKeys && ++aiFailStreak >= AI_ALERT_STREAK) await raiseAiAlert(result.reason, false);
@@ -744,15 +773,21 @@ async function imageDHash(imageUrl) {
     return hash;
 }
 
-// Ö3 rules first; otherwise one AI call returns risk and the cleaned Amazon query (Ö5).
+// Ö3 rules first, but only a rule that blocks the product replaces the AI. Otherwise one AI
+// call with the product image returns risk and the cleaned Amazon query (Ö5).
 async function triageProduct(product) {
+    const { settings } = await loadAiContext();
     const rule = IndyAI.ruleRisk(product.title);
-    if (rule) {
+    if (rule && settings.riskBlockThreshold > 0 && rule.riskScore >= settings.riskBlockThreshold) {
         countAi('rule.hit');
         return { ...rule, amazonQuery: null };
     }
-    const images = [];
-    try { if (product.imageUrl) images.push(await imageToInline(product.imageUrl, 768)); } catch (e) {}
+    let images;
+    try {
+        images = [await imageToInline(product.imageUrl, 768)];
+    } catch (e) {
+        return { error: true, imageFailed: true, reason: 'eBay görseli indirilemedi' };
+    }
     const r = await runAi('triage', IndyAI.triagePrompt({ title: product.title, price: product.ebayPrice, seller: product.sellerName }), images, 200);
     if (!r.ok) return { error: true, reason: r.reason, noKeys: r.noKeys };
     const t = IndyAI.normalizeTriage(r.json);
@@ -770,12 +805,13 @@ function withAutoCollectFlag(url) {
 }
 
 // Ö2: decide risk right before Amazon opens, and skip high-risk products.
-// When the AI gives no answer fetching halts (stopOnAiFailure); with that setting off,
-// no key or risk blocking off, the product is fetched with its original query.
+// When the AI gives no answer (or no key exists) fetching halts and the user is asked; with
+// their approval the product is fetched with its original query. A product that is not on the
+// list or has no usable image cannot be judged, so only that product is left out.
 async function prepareAmazonFetch(itemId, fallbackUrl) {
     const { potentialProducts = [] } = await chrome.storage.local.get('potentialProducts');
     const product = potentialProducts.find(p => p.itemId === itemId);
-    if (!product) return { url: withAutoCollectFlag(fallbackUrl) };
+    if (!product) return { skip: true };
     const { settings } = await loadAiContext();
     let triage;
     if (product.riskScore !== undefined && product.amazonQuery !== undefined) {
@@ -789,18 +825,28 @@ async function prepareAmazonFetch(itemId, fallbackUrl) {
             });
         }
     }
-    if (IndyAI.triageHalts(triage, settings)) {
+    if (triage.error) {
+        if (await aiBypassActive()) {
+            countAi('fetch.noAiApproved');
+            await saveProductFields(itemId, { fetchNoAi: true });
+            return { url: withAutoCollectFlag(product.amazonSearchUrl || fallbackUrl) };
+        }
+        if (triage.imageFailed) {
+            await saveProductFields(itemId, { aiMatch: 'blocked', aiMatchReason: triage.reason });
+            countAi('match.blocked');
+            return { skip: true };
+        }
         countAi('fetch.haltedNoAi');
         await raiseAiAlert(triage.reason, true);
         return { halt: true, reason: triage.reason };
     }
-    if (!triage.error && settings.riskBlockThreshold > 0 && triage.riskScore >= settings.riskBlockThreshold) {
+    if (settings.riskBlockThreshold > 0 && triage.riskScore >= settings.riskBlockThreshold) {
         await saveProductFields(itemId, { fetched: true, fetchSkipReason: `Risk ${triage.riskScore}/10 — ${triage.reason}` });
         countAi('fetch.skippedRisk');
         return { skip: true };
     }
     const base = product.amazonSearchUrl || fallbackUrl;
-    return { url: withAutoCollectFlag(IndyAI.amazonSearchUrlFor(base, triage.error ? null : triage.amazonQuery)) };
+    return { url: withAutoCollectFlag(IndyAI.amazonSearchUrlFor(base, triage.amazonQuery)) };
 }
 
 // Ö1: perceptual hash decides clear cases; the AI only sees borderline pairs.
@@ -818,35 +864,52 @@ async function compareSellerImages(mainImageUrl, targetImageUrl) {
     try {
         images = await Promise.all([mainImageUrl, targetImageUrl].map(u => imageToInline(u, 512)));
     } catch (e) {
-        return { error: true, reason: 'Görsel indirilemedi' };
+        return { error: true, imageFailed: true, reason: 'Görsel indirilemedi' };
     }
     const r = await runAi('imageCompare', IndyAI.imageComparePrompt(), images, 200);
-    if (!r.ok) return { error: true, reason: r.reason };
+    if (!r.ok) {
+        // Approved to go on without the AI: an undecided photo does not count as a match.
+        if (await aiBypassActive()) return { isMatch: false, method: 'noAi' };
+        await raiseAiAlert(r.reason, true);
+        return { error: true, reason: r.reason };
+    }
     return { isMatch: r.json.isMatch === true, method: r.provider, analysis: r.json.analysis };
 }
 
 // Ö4: only Amazon results the AI calls the same product are kept for an eBay fetch.
+// Result: { matches } from the AI, { skipped } when verification is off or the user approved going
+// on without the AI (the list stays as filtered), { blocked } otherwise (nothing is saved).
 async function verifyAmazonMatch(itemId, candidates) {
     const { settings } = await loadAiContext();
-    if (!settings.matchVerification) return { skipped: true };
+    if (!settings.matchVerification || !candidates.length) return { skipped: true };
+    const blocked = async (reason, aiDown = false) => {
+        if (await aiBypassActive()) {
+            await saveProductFields(itemId, { aiMatch: 'unverified', aiMatchReason: reason });
+            countAi('match.unverified');
+            return { skipped: true };
+        }
+        await saveProductFields(itemId, { aiMatch: 'blocked', aiMatchReason: reason });
+        countAi('match.blocked');
+        if (aiDown) {
+            await raiseAiAlert(reason, true);
+            if (fetchAllState === 'running') await haltFetchAll(reason);
+        }
+        return { blocked: true, reason };
+    };
     const { potentialProducts = [] } = await chrome.storage.local.get('potentialProducts');
     const product = potentialProducts.find(p => p.itemId === itemId);
-    if (!product || !product.imageUrl || !candidates.length) return { skipped: true };
-    const unverified = async reason => {
-        await saveProductFields(itemId, { aiMatch: 'unverified', aiMatchReason: reason });
-        countAi('match.unverified');
-        return { error: true, reason };
-    };
+    if (!product) return blocked('Ürün listede yok');
+    if (!product.imageUrl) return blocked('eBay görseli yok');
     let reference;
-    try { reference = await imageToInline(product.imageUrl, 512); } catch (e) { return unverified('eBay görseli indirilemedi'); }
+    try { reference = await imageToInline(product.imageUrl, 512); } catch (e) { return blocked('eBay görseli indirilemedi'); }
     const limited = candidates.slice(0, settings.matchCandidateLimit);
     const loaded = await Promise.all(limited.map(c => c.imageUrl ? imageToInline(c.imageUrl, 384).catch(() => null) : null));
     const usable = limited.filter((c, i) => loaded[i]);
-    if (!usable.length) return unverified('Amazon görselleri indirilemedi');
+    if (!usable.length) return blocked('Amazon görselleri indirilemedi');
     const r = await runAi('match', IndyAI.matchPrompt(product, usable), [reference, ...loaded.filter(Boolean)], 300);
-    if (!r.ok) return unverified(r.reason);
+    if (!r.ok) return blocked(r.reason, true);
     const matches = IndyAI.normalizeMatch(r.json, usable);
-    if (!matches) return unverified('AI yanıtı eksik');
+    if (!matches) return blocked('AI yanıtı eksik', true);
     await saveProductFields(itemId, { aiMatch: matches.length ? 'verified' : 'no_match', aiMatchCount: matches.length, aiMatchProvider: r.provider });
     countAi(matches.length ? 'match.verified' : 'match.noMatch');
     return { matches, provider: r.provider };
@@ -958,6 +1021,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         endBgCollect("stopped_by_user").then(() => sendResponse({ status: "stopped" }));
         return true;
     }
+    if (message.action === "allowNoAi") {
+        (async () => {
+            await chrome.storage.local.set({ aiBypass: { at: Date.now() } });
+            await chrome.storage.local.remove('aiAlert');
+            sendResponse({ status: "ok" });
+        })();
+        return true;
+    }
     if (message.action === "analyzeProductRisk") {
         (async () => {
             const result = await triageProduct({
@@ -979,13 +1050,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
     if (message.action === "verifyAmazonMatch") {
-        const tabId = sender.tab && sender.tab.id;
-        const itemId = tabId ? fetchingTabs[tabId] : null;
-        if (!itemId) {
-            sendResponse({ skipped: true });
-            return true;
-        }
-        verifyAmazonMatch(itemId, message.candidates || []).then(sendResponse);
+        (async () => {
+            const tabId = sender.tab && sender.tab.id;
+            const itemId = tabId ? await fetchingItemFor(tabId) : null;
+            sendResponse(await verifyAmazonMatch(itemId, message.candidates || []));
+        })();
         return true;
     }
     if (message.action === "initiateSmoothScroll") {
@@ -1033,7 +1102,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "openTabInBackground") {
         (async () => {
             let url = message.url;
-            if (message.itemId && String(url).includes('indygrab_auto_collect=true')) {
+            if (String(url).includes('indygrab_auto_collect=true')) {
                 const prep = await prepareAmazonFetch(message.itemId, url);
                 if (prep.halt) {
                     sendResponse({ status: "aiHalted", reason: prep.reason });
@@ -1050,9 +1119,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 active: false,
                 windowId: sender.tab.windowId 
             });
-            if (message.itemId) {
-                fetchingTabs[tab.id] = message.itemId;
-            }
+            if (message.itemId) await rememberFetchingTab(tab.id, message.itemId);
             sendResponse({ status: "success" });
         })();
         return true;
@@ -1103,7 +1170,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     if (qi !== -1) fetchAllQueue[qi].status = 'waiting';
                     await chrome.storage.local.set({ fetchAllQueue });
                 }
-                delete fetchingTabs[tabId];
+                await forgetFetchingTab(tabId);
                 try { await chrome.tabs.remove(tabId); } catch (e) {}
             }
             sendResponse({ status: "cooldown", until: fetchAllBlockedUntil });
@@ -1113,13 +1180,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'closeSelf') {
         if (sender.tab && sender.tab.id) {
             const tabId = sender.tab.id;
-            const itemId = fetchingTabs[tabId];
-            if (itemId) {
-                markProductAsFetched(itemId);
-                delete fetchingTabs[tabId];
-            }
-            chrome.tabs.remove(tabId);
-            sendResponse({ status: "success" });
+            (async () => {
+                const itemId = await fetchingItemFor(tabId);
+                // keepUnfetched: the AI could not decide, so the next run tries this product again.
+                if (itemId && !message.keepUnfetched) await markProductAsFetched(itemId);
+                await forgetFetchingTab(tabId);
+                chrome.tabs.remove(tabId);
+                sendResponse({ status: "success" });
+            })();
         } else {
             sendResponse({ status: "error", message: "Tab ID not found." });
         }

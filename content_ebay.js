@@ -151,6 +151,10 @@ function createC4ResultsWindow() {
     makeDraggable(resultsWindow);
 }
 
+function askGoOnWithoutAi(reason) {
+    return confirm(`AI yanıt vermiyor (${reason}).\n\nAI olmadan devam edilsin mi? Onayın, AI yeniden yanıt verene kadar geçerli olur.`);
+}
+
 function addProductToResultsWindow(productInfo) {
     const resultsList = document.getElementById('c4-results-list');
     if (!resultsList) return;
@@ -178,9 +182,19 @@ function addProductToResultsWindow(productInfo) {
     const fetchButton = itemElement.querySelector('.c4-amazon-fetch-button');
     fetchButton.addEventListener('click', () => {
         const autoCollectUrl = productInfo.amazonSearchUrl + '&indygrab_auto_collect=true';
-        chrome.runtime.sendMessage({ action: "openTabInBackground", url: autoCollectUrl });
         fetchButton.textContent = 'Çekiliyor...';
         fetchButton.disabled = true;
+        chrome.runtime.sendMessage({ action: "openTabInBackground", url: autoCollectUrl, itemId: productInfo.itemId }, response => {
+            if (response && response.status === 'aiHalted') {
+                fetchButton.textContent = "Amazon'dan Çek";
+                fetchButton.disabled = false;
+                if (askGoOnWithoutAi(response.reason)) {
+                    chrome.runtime.sendMessage({ action: "allowNoAi" }, () => fetchButton.click());
+                }
+            } else if (response && response.status === 'skipped') {
+                fetchButton.textContent = 'Çekilmedi';
+            }
+        });
     });
     const bookmarkStar = itemElement.querySelector('.c4-bookmark-star');
     bookmarkStar.addEventListener('click', () => {
@@ -734,6 +748,7 @@ async function autoScrollToLoadItems() {
             aiButton.disabled = true;
             aiButton.textContent = "AI İnceliyor...";
             let matchCount = 0;
+            let aiStopped = false;
 
             for (let i = 0; i < data.length; i++) {
                 if (i > 0) {
@@ -768,6 +783,17 @@ async function autoScrollToLoadItems() {
                         }, resolve);
                     });
 
+                    if (!response || (response.error && !response.imageFailed)) {
+                        if (wrappers[i]) wrappers[i].style.border = "1px solid #e5e7eb";
+                        // An unattended run cannot ask: it stops and the panel shows the question.
+                        if (autoAnalyze || !askGoOnWithoutAi(response ? response.reason : 'yanıt yok')) {
+                            aiStopped = true;
+                            break;
+                        }
+                        await new Promise(resolve => chrome.runtime.sendMessage({ action: "allowNoAi" }, resolve));
+                        continue;
+                    }
+
                     if (response && response.isMatch) {
                         matchCount++;
                         if (wrappers[i]) {
@@ -801,7 +827,7 @@ async function autoScrollToLoadItems() {
                 if (autoAnalyze) await AslRequestDelay(100);
             }
             aiButton.disabled = false;
-            aiButton.textContent = `Tamamlandı (${matchCount} Eşleşme)`;
+            aiButton.textContent = aiStopped ? `AI yanıt vermedi, durduruldu (${matchCount} Eşleşme)` : `Tamamlandı (${matchCount} Eşleşme)`;
             if (!autoAnalyze) setTimeout(() => {
                 aiButton.textContent = '🤖 AI ile Eşle & Kaydet';
             }, 3000);

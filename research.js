@@ -342,8 +342,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     riskAnalysisHtml += `<div class="ai-card-status good">AI eşleşmeyi doğruladı (${Number(product.aiMatchCount) || 0} ASIN)</div>`;
                 } else if (product.aiMatch === 'no_match') {
                     riskAnalysisHtml += `<div class="ai-card-status bad">AI aynı ürünü bulamadı — ASIN kaydedilmedi</div>`;
+                } else if (product.aiMatch === 'blocked') {
+                    riskAnalysisHtml += `<div class="ai-card-status bad">AI karar veremedi — ASIN kaydedilmedi, yeniden denenecek${product.aiMatchReason ? ': ' + escapeHTML(product.aiMatchReason) : ''}</div>`;
                 } else if (product.aiMatch === 'unverified') {
-                    riskAnalysisHtml += `<div class="ai-card-status">AI doğrulanamadı, filtre sonucu kaydedildi${product.aiMatchReason ? ': ' + escapeHTML(product.aiMatchReason) : ''}</div>`;
+                    riskAnalysisHtml += `<div class="ai-card-status">AI olmadan, onayınla kaydedildi${product.aiMatchReason ? ': ' + escapeHTML(product.aiMatchReason) : ''}</div>`;
                 }
                 card.innerHTML = `
                     <button class="remove-product-btn" title="Bu ürünü sil">&times;</button>
@@ -405,6 +407,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (response && response.status === 'aiHalted') {
                     target.textContent = "Amazon'dan Çek";
                     target.disabled = false;
+                    if (askGoOnWithoutAi(response.reason)) {
+                        chrome.runtime.sendMessage({ action: "allowNoAi" }, () => target.click());
+                    }
                 }
             });
         }
@@ -1073,6 +1078,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         if (message.action === 'fetchAllQueueFinished') {
             updateFetchAllButton();
+            if (message.halted && askGoOnWithoutAi(message.reason)) {
+                chrome.runtime.sendMessage({ action: "allowNoAi" }, () => {
+                    chrome.runtime.sendMessage({ action: "startFetchAllQueue" }, () => updateFetchAllButton());
+                });
+            }
         }
     });
 
@@ -1196,6 +1206,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
     }
 
+    function askGoOnWithoutAi(reason) {
+        return confirm(`AI yanıt vermiyor (${reason}).\n\nAI olmadan devam edilsin mi? Onayın, AI yeniden yanıt verene kadar geçerli olur.`);
+    }
+
     async function hasAnyAiKey() {
         const names = [...Object.values(IndyAI.KEY_STORAGE), ...Object.values(IndyAI.LEGACY_KEY_STORAGE)];
         return Object.values(IndyAI.keysFromStorage(await chrome.storage.local.get(names))).some(Boolean);
@@ -1218,6 +1232,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const productsToAnalyze = allProducts.filter(p => p.riskScore === undefined);
         const totalItems = productsToAnalyze.length;
         let processedCount = 0;
+        let failedCount = 0;
+        let askedAboutAi = false;
 
         if (totalItems === 0) {
              alert("Listede analiz edilecek yeni ürün yok.");
@@ -1313,6 +1329,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     resDiv.style.color = "#fca5a5";
                     resDiv.innerHTML = "Hata: " + (result.reason || "Bilinmiyor");
                 }
+                failedCount++;
+                if (!askedAboutAi) {
+                    askedAboutAi = true;
+                    if (!confirm(`AI yanıt vermiyor (${result.reason || 'Bilinmiyor'}).\n\nKalan ürünler için denemeye devam edilsin mi? Yanıt alınamayan ürünlere puan verilmez.`)) {
+                        processedCount++;
+                        break;
+                    }
+                }
             }
 
             processedCount++;
@@ -1339,7 +1363,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderProducts(allProducts);
 
         progressBar.style.backgroundColor = '#27ae60';
-        progressText.textContent = `Tamamlandı! (${totalItems} Ürün İncelendi)`;
+        progressText.textContent = failedCount
+            ? `AI yanıt vermedi: ${processedCount - failedCount} ürün analiz edildi, ${failedCount} başarısız, ${totalItems - processedCount} kaldı.`
+            : `Tamamlandı! (${totalItems} Ürün İncelendi)`;
         analyzeRiskBtn.disabled = false;
         analyzeRiskBtn.textContent = "Risk Analizi (AI)";
 

@@ -287,12 +287,3 @@ test('legacy key lists migrate to one key per provider', () => {
     assert.deepEqual(AI.providerOrder('match', {}, AI.keysFromStorage(m.set)), ['gemini', 'claude']);
 });
 
-test('failed triage halts fetching only with a key, the stop setting on and risk blocking on', () => {
-    const failed = { error: true, reason: 'DeepSeek HTTP 402' };
-    assert.equal(AI.mergeSettings({}).stopOnAiFailure, true);
-    assert.equal(AI.triageHalts(failed, {}), true);
-    assert.equal(AI.triageHalts({ ...failed, noKeys: true }, {}), false, 'no key at all keeps the AI-less flow');
-    assert.equal(AI.triageHalts(failed, { stopOnAiFailure: false }), false);
-    assert.equal(AI.triageHalts(failed, { riskBlockThreshold: 0 }), false, 'a score that blocks nothing is not worth stopping for');
-    assert.equal(AI.triageHalts({ riskScore: 3, reason: 'ok' }, {}), false);
-});

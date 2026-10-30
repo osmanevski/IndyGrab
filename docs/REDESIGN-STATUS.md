@@ -75,8 +75,9 @@ Claude %4 / %5. Bunlar hesap genelidir; görev veya oturum bazında maliyet ayr�
   kuraldan geçerse tek AI isteği risk + temiz Amazon sorgusu üretir; eşik (varsayılan 7)
   ve üstü `fetched` + `fetchSkipReason` ile atlanır. AI yoksa orijinal sorguyla çekilir.
 - Ö4: eBay→Amazon çekiminde filtreyi geçen ilk 10 aday görselle doğrulanır, yalnız
-  eşleşenler kalır (BSR isteğinden önce). AI yanıt veremezse filtre sonucu kaydedilir,
-  ürün `aiMatch: unverified` işaretlenir.
+  eşleşenler kalır (BSR isteğinden önce). AI karar veremezse hiçbir ASIN kaydedilmez, ürün
+  `aiMatch: blocked` ile çekilmemiş kalır, iş durur ve kullanıcıya AI olmadan devam edilip edilmeyeceği sorulur
+  (2026-10-30). Filtre sonucu yalnız doğrulama kapalıyken ya da bu onayla (`aiBypass`, `aiMatch: unverified`) kaydedilir.
 - Ö1: satıcı görsel karşılaştırması önce dHash (≤10 aynı, ≥22 farklı), arası AI.
 - AI ayarları sayfası: iki sağlayıcının anahtarları, iş başına sağlayıcı (diğeri yedek),
   risk eşiği, eşleşme doğrulaması, `aiStats` sayaçları, ayarlı ve son yanıt veren model (`aiLastModels`). Anahtar/toplu analiz kimlikleri korundu.

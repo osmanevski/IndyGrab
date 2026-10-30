@@ -4,7 +4,8 @@
 Covers the service-worker path unit tests cannot reach: importScripts(ai-core.js), the
 fetch-all queue skipping a rule-flagged product without any AI call, one DeepSeek triage
 call producing the cleaned Amazon query, AI match verification from the real Amazon
-content script, hash-only image comparison, and the no-key fallback to the old behavior.
+content script, hash-only image comparison, and nothing running without the AI unless the
+user approved it: no key and an AI outage both halt until the approval arrives.
 
 Tabs opened by the extension itself (chrome.tabs.create) are not intercepted by
 Playwright routing, so the Amazon step runs in a Playwright-owned tab registered in the
@@ -81,6 +82,7 @@ def main() -> int:
     amazon_queries: list[str] = []
     unrouted: list[str] = []
     failures: list[str] = []
+    ai_down = {"value": False}
 
     def check(condition: bool, message: str) -> None:
         if not condition:
@@ -89,6 +91,8 @@ def main() -> int:
     def router(route: Any) -> None:
         url = route.request.url
         if url.startswith("https://api.deepseek.com/"):
+            if ai_down["value"]:
+                return route.fulfill(status=402, content_type="application/json", body="{}")
             body = json.loads(route.request.post_data or "{}")
             deepseek_calls.append(body)
             content = body["messages"][1]["content"]
@@ -140,7 +144,8 @@ def main() -> int:
                 tab = ctx.new_page()
                 tab.goto("https://www.amazon.com/e2e-blank")
                 tab_id = worker.evaluate("async () => (await chrome.tabs.query({url: 'https://www.amazon.com/e2e-blank'}))[0].id")
-                worker.evaluate("([tabId, itemId]) => { fetchingTabs[tabId] = itemId; }", [tab_id, item["itemId"]])
+                # Emptying the map stands in for a worker restart: session storage must still know the tab.
+                worker.evaluate("async ([tabId, itemId]) => { await rememberFetchingTab(tabId, itemId); fetchingTabs = {}; }", [tab_id, item["itemId"]])
                 try:
                     tab.goto(prep["url"])
                 except Exception:
@@ -194,17 +199,63 @@ def main() -> int:
             wait_js(page, "() => document.getElementById('ai-model-deepseek').textContent.includes('Son yanıt: DeepSeek-V4.1-Flash')")
             check("gemini-3.8-flash" in page.locator("#ai-model-gemini").inner_text(), "Gemini model label")
 
-            # 4) No keys: previous behavior — original query, filter result saved, marked unverified.
+            # 4) No keys: fetching halts; after the user's approval the filter result is saved, marked unverified.
             deepseek_calls.clear()
             amazon_queries.clear()
             nokey = product("e2e-nokey", "Woven Storage Basket Large")
             worker.evaluate("d => chrome.storage.local.set(d)", {"deepseekApiKey": "", "geminiApiKey": "", "memoryAsins": [], "potentialProducts": [nokey]})
+            prep = worker.evaluate("([id, url]) => prepareAmazonFetch(id, url)", [nokey["itemId"], nokey["amazonSearchUrl"]])
+            check(prep.get("halt") is True, f"no key must halt until approved: {prep}")
+            check(not amazon_queries, "no key must not open Amazon before approval")
+            check((storage(["aiAlert"]).get("aiAlert") or {}).get("halted") is True, "no key must raise the question")
+            page.evaluate("chrome.runtime.sendMessage({action: 'allowNoAi'})")
             fetch_in_owned_tab(nokey)
             got = product_by_id("e2e-nokey")
             check(not deepseek_calls, "no-key run must not call the AI")
             check(amazon_queries == ["Woven Storage Basket Large"], f"no-key query: {amazon_queries}")
             check(got.get("aiMatch") == "unverified", f"no-key product should be marked unverified: {got}")
             check(sorted(storage(["memoryAsins"])["memoryAsins"]) == ["B0MATCH001", "B0OTHER002"], "no-key pool should keep the filter result")
+
+            # 5) AI cannot decide on the match: nothing saved, product stays unfetched for a retry.
+            worker.evaluate("chrome.storage.local.remove('aiBypass')")
+            ai_down["value"] = True
+            down = {**product("e2e-down", "Woven Storage Basket Small"), "riskScore": 2, "riskReason": "ok", "amazonQuery": "woven basket"}
+            worker.evaluate("d => chrome.storage.local.set(d)", {"deepseekApiKey": "sk-fixture-deepseek-01", "memoryAsins": [], "potentialProducts": [down]})
+            prep = worker.evaluate("([id, url]) => prepareAmazonFetch(id, url)", [down["itemId"], down["amazonSearchUrl"]])
+            tab = ctx.new_page()
+            tab.goto("https://www.amazon.com/e2e-blank")
+            tab_id = worker.evaluate("async () => (await chrome.tabs.query({url: 'https://www.amazon.com/e2e-blank'}))[0].id")
+            worker.evaluate("([tabId, itemId]) => rememberFetchingTab(tabId, itemId)", [tab_id, down["itemId"]])
+            try:
+                tab.goto(prep["url"])
+            except Exception:
+                pass
+            wait_js(page, "async () => (await chrome.storage.local.get('potentialProducts')).potentialProducts[0].aiMatch === 'blocked'", timeout=45_000)
+            # The tab may already be gone by now, so poll instead of waiting for its close event.
+            for _ in range(30):
+                if tab.is_closed():
+                    break
+                page.wait_for_timeout(500)
+            check(tab.is_closed(), "undecided fetch tab must close itself")
+            got = product_by_id("e2e-down")
+            check(not got.get("fetched"), f"undecided product must stay unfetched: {got}")
+            check(storage(["memoryAsins"])["memoryAsins"] == [], "undecided match must not save any ASIN")
+            check((storage(["aiAlert"]).get("aiAlert") or {}).get("halted") is True, "undecided match must raise the question")
+
+            # 5b) AI back: its first answer ends an earlier approval.
+            ai_down["value"] = False
+            page.evaluate("chrome.runtime.sendMessage({action: 'allowNoAi'})")
+            back = product("e2e-back", "Woven Storage Basket Medium")
+            worker.evaluate("d => chrome.storage.local.set(d)", {"potentialProducts": [down, back]})
+            fetch_in_owned_tab(back)
+            check(product_by_id("e2e-back").get("aiMatch") == "verified", "AI back: match must be verified")
+            check("aiBypass" not in storage(["aiBypass"]), "an AI answer must end the approval")
+
+            # 6) An auto-collect request with no product behind it opens nothing.
+            tabs_before = len(ctx.pages)
+            orphan = page.evaluate("chrome.runtime.sendMessage({action: 'openTabInBackground', url: 'https://www.amazon.com/s?k=x&indygrab_auto_collect=true'})")
+            check(orphan.get("status") == "skipped", f"auto-collect without a product: {orphan}")
+            check(len(ctx.pages) == tabs_before, "auto-collect without a product must not open a tab")
             check(not errors, f"page errors: {errors}")
         finally:
             ctx.close()

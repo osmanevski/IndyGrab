@@ -26,7 +26,7 @@ Amazon ve eBay üzerinde dropshipping / online arbitraj için ürün araştırma
 - VeRO / marka / tehlikeli ürün için önce kural tabanlı, sonra AI destekli risk puanı.
 - Amazon araması için başlık temizleme ve eBay ürünüyle Amazon sonucunun eşleşme kontrolü.
 - Aynı ürünü satan başka satıcıları bulmak için görsel karşılaştırma.
-- Google Gemini, DeepSeek, Anthropic Claude ve OpenRouter desteklenir; her sağlayıcı için kendi API anahtarınızla çalışır. Anahtar girilmezse eklenti AI'sız akışla devam eder.
+- Google Gemini, DeepSeek, Anthropic Claude ve OpenRouter desteklenir; her sağlayıcı için kendi API anahtarınızla çalışır. Anahtar yoksa ya da AI yanıt vermezse iş durur ve AI olmadan devam edilip edilmeyeceği sorulur; onay vermeden AI'lı özellikler AI'sız çalışmaz.
 
 **Yardımcı araçlar**
 - Mixer: ASIN listelerini karıştırma, tekrarları ayıklama, kopyalama ve indirme.

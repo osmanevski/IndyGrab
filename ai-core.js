@@ -23,9 +23,6 @@
         riskBlockThreshold: 7,
         // Only AI-confirmed ASINs are saved on eBay → Amazon fetches.
         matchVerification: true,
-        // When the risk AI gives no answer (quota, credit, outage) fetching stops instead of
-        // opening the product unchecked. Ignored without any key or with risk blocking off.
-        stopOnAiFailure: true,
         // dHash hamming distance: <= same → same photo, >= different → other photo, between → ask AI.
         hashSameMax: 10,
         hashDifferentMin: 22,
@@ -48,14 +45,8 @@
         for (const p of Object.keys(merged.models)) if (!PROVIDERS[p]) delete merged.models[p];
         merged.riskBlockThreshold = Number.isFinite(Number(merged.riskBlockThreshold)) ? Number(merged.riskBlockThreshold) : DEFAULT_AI_SETTINGS.riskBlockThreshold;
         merged.matchVerification = merged.matchVerification !== false;
-        merged.stopOnAiFailure = merged.stopOnAiFailure !== false;
+        delete merged.stopOnAiFailure;
         return merged;
-    }
-
-    // A failed triage halts fetching only when its score would have mattered.
-    function triageHalts(triage, settings) {
-        const s = mergeSettings(settings);
-        return !!(triage && triage.error && !triage.noKeys && s.stopOnAiFailure && s.riskBlockThreshold > 0);
     }
 
     // One API key per provider, stored as a string. Older versions kept a list per provider
@@ -471,7 +462,7 @@ Return ONLY a JSON object: {"analysis": "one short sentence", "isMatch": true}`;
 
     const api = {
         PROVIDERS, DEFAULT_AI_SETTINGS, mergeSettings, KEY_STORAGE, LEGACY_KEY_STORAGE,
-        normalizeKey, keysFromStorage, migrateKeyStorage, providerOrder, triageHalts,
+        normalizeKey, keysFromStorage, migrateKeyStorage, providerOrder,
         ruleRisk, dHashFromGray, hammingHex, hashVerdict,
         triagePrompt, matchPrompt, imageComparePrompt,
         parseJsonLoose, normalizeTriage, normalizeMatch, amazonSearchUrlFor, runAiTask, listModels

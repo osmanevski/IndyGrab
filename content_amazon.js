@@ -8,10 +8,10 @@
     // "Tümünü Çek" sekmesi yalnızca bir kez kapanma isteği göndermeli (çift istek
     // arka planda gereksiz hataya yol açar), ama HER koşulda göndermelidir.
     let autoCloseSent = false;
-    function closeAutoTab() {
+    function closeAutoTab(keepUnfetched = false) {
         if (autoCloseSent) return;
         autoCloseSent = true;
-        chrome.runtime.sendMessage({ action: 'closeSelf' });
+        chrome.runtime.sendMessage({ action: 'closeSelf', keepUnfetched });
     }
 
     // Auto collect belongs to exactly one tab (the panel's background window, or the tab the
@@ -1395,8 +1395,10 @@
 
             // Ö4: on an eBay → Amazon fetch keep only results the AI confirms as the same product.
             // Runs before BSR lookups so rejected results cost no product-page requests.
-            // No answer (no key, quota, network) leaves the list untouched: the old behavior.
-            if (isAutoSaveMode && isSearchPage() && availableItems.length > 0) {
+            // Without a decision (quota, network, no key, unknown product) nothing is saved and the
+            // product stays unfetched. Only verification turned off or the user's approval to go on
+            // without the AI keeps the filter result.
+            if (isAutoSaveMode && availableItems.length > 0) {
                 const verdict = await new Promise(resolve => {
                     try {
                         chrome.runtime.sendMessage({
@@ -1407,7 +1409,11 @@
                         resolve(null);
                     }
                 });
-                if (verdict && Array.isArray(verdict.matches)) {
+                if (!verdict || verdict.blocked) {
+                    closeAutoTab(true);
+                    return;
+                }
+                if (Array.isArray(verdict.matches)) {
                     const confirmed = new Set(verdict.matches);
                     availableItems = availableItems.filter(item => confirmed.has(item.asin));
                 }
